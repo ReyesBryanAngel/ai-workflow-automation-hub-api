@@ -94,3 +94,19 @@ model CrmRecord {
 
   @@map("crm_records")
 }
+
+// DB-backed override for the Claude system prompts in src/prompts, keyed by
+// PromptTemplateKey. Lets Module 5 Settings edit prompt wording without a
+// redeploy; absence of a row (or isActive=false) falls back to the
+// hardcoded default in the corresponding prompt file.
+model PromptTemplate {
+  id          Int      @id @default(autoincrement())
+  key         String   @unique
+  description String?
+  content     String
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("prompt_templates")
+}

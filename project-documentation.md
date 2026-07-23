@@ -734,7 +734,33 @@ Environment Variables
 
 SQL Injection Protection
 
-Prompt Injection Consideration (document how prompts are constrained)
+## Prompt Injection Consideration
+
+The email `body` and `sender`/`subject` fields reaching `/api/ai/analyze` and `/api/ai/reply` are untrusted, attacker-controlled input — the whole point of the pipeline is to run Claude over emails nobody has read yet. Mitigation is layered directly into the prompt construction, not bolted on after:
+
+Delimiting
+
+- The raw email body is wrapped in an `<email_body>` tag inside a larger `<email>` block in the **user** message (`buildEmailAnalysisUserPrompt` / `buildEmailReplyUserPrompt` in `src/prompts/`). Task instructions live only in the **system** prompt, which the sender never controls, so instructions and untrusted data are never in the same channel.
+
+Explicit instruction-hierarchy statement
+
+- The system prompt tells Claude, in plain language, that everything inside `<email_body>` is data to analyze, not commands to obey, and to disregard embedded text that looks like "ignore previous instructions" or role-play attempts ("you are now..."). This is stated once per call in `DEFAULT_EMAIL_ANALYSIS_SYSTEM_PROMPT` / `DEFAULT_EMAIL_REPLY_SYSTEM_PROMPT` (or their `prompt_templates` DB overrides, if set).
+
+Constrained, schema-locked output
+
+- Both calls use `messages.parse` with a Zod-derived `output_config.format` (`emailAnalysisOutputFormat` / `emailReplyOutputFormat`), so a response can only ever be the declared JSON shape. Even a partially successful injection can't make the model emit free text, alternate formatting, or anything the caller would execute or render unescaped.
+
+No tool access on these calls
+
+- Analysis and reply generation are plain text-in/structured-data-out calls with no tools bound. An injected instruction has nothing to invoke — it cannot trigger the MCP tools (Phase 4) or any side effect from inside the prompt itself.
+
+Residual risk
+
+- This is defense-in-depth, not a guarantee — no delimiting scheme fully eliminates injection risk in an LLM prompt. The output is still treated as AI-assisted, not authoritative: category/priority/summary feed downstream automation (CRM, Slack) as data, and anything consequential (e.g. sending the drafted reply) is expected to go through a human or an explicit action, not be auto-executed off model output alone.
+
+Editable prompts, same guardrails
+
+- System prompts can be overridden per `PromptTemplateKey` via the `prompt_templates` table (feeds Module 5 Settings, see §8 Module 5) without a redeploy. The delimiting/instruction-hierarchy language lives in that same editable text, so anyone updating a prompt template is responsible for preserving it — the code enforces schema-locked output and no-tool-access regardless of prompt content, but the injection-resistant wording itself is data, not code.
 
 ---
 

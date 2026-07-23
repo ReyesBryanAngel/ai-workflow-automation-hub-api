@@ -10,14 +10,14 @@ This breaks the project into 8 sequential phases mapped to a 3–4 day build. Ea
 ## Phase 0 — Project Setup & Scaffolding
 **Goal:** Empty repo → runnable skeleton for both apps + tooling in place.
 
-- [ ] Init backend: `ai-workflow-automation-hub-api` (Express + TypeScript), tsconfig, eslint/prettier
+- [x] Init backend: `ai-workflow-automation-hub-api` (Express + TypeScript), tsconfig, eslint/prettier
 - [ ] Init frontend: `ai-workflow-automation-hub-web` (React + TypeScript via Vite), MUI theme baseline
-- [ ] Install PostgreSQL locally (or via Laragon) and create dev database
-- [ ] Init Prisma in backend, configure `DATABASE_URL`
-- [ ] Set up `.env` / `.env.example` for both apps (DB url, Anthropic key, Slack webhook, JWT secret, ports)
+- [x] Install PostgreSQL locally (or via Laragon) and create dev database
+- [x] Init Prisma in backend, configure `DATABASE_URL`
+- [x] Set up `.env` / `.env.example` for both apps (DB url, Anthropic key, Slack webhook, JWT secret, ports)
 - [ ] Install and run n8n locally (npm or Docker), confirm editor UI loads at `localhost:5678`
-- [ ] Create Postman or Bruno collection scaffold for the API
-- [ ] Push initial commit structure to GitHub, confirm `.gitignore` excludes `.env`, `node_modules`, Prisma generated client
+- [x] Create Postman collection for the API
+- [x] Push initial commit structure to GitHub, confirm `.gitignore` excludes `.env`, `node_modules`, Prisma generated client
 
 **Done when:** backend `npm run dev` serves a health-check route, frontend `npm run dev` renders a blank shell, `psql` connects, n8n editor is reachable.
 
@@ -26,13 +26,13 @@ This breaks the project into 8 sequential phases mapped to a 3–4 day build. Ea
 ## Phase 1 — Database & Core Backend
 **Goal:** Data layer and Express skeleton ready for feature endpoints.
 
-- [ ] Write Prisma schema: `emails`, `workflow_logs`, `crm_records` (fields per doc §13)
-- [ ] Run initial migration, verify tables in Postgres
-- [ ] Add Express middleware stack: JSON body parsing, CORS, request logging (Winston or Pino), centralized error handler
-- [ ] Add Zod schemas for request validation on all mutating routes
-- [ ] Implement JWT auth: login/register (or a seeded single admin user), auth middleware, protected routes
-- [ ] Implement basic CRUD for `emails`: `GET /api/emails`, `GET /api/emails/:id`, `POST /api/emails`
-- [ ] Add rate limiting middleware (e.g. `express-rate-limit`)
+- [x] Write Prisma schema: `emails`, `workflow_logs`, `crm_records` (fields per doc §13)
+- [x] Run initial migration, verify tables in Postgres
+- [x] Add Express middleware stack: JSON body parsing, CORS, request logging (Winston or Pino), centralized error handler
+- [x] Add Zod schemas for request validation on all mutating routes
+- [x] Implement JWT auth: login/register (or a seeded single admin user), auth middleware, protected routes
+- [x] Implement basic CRUD for `emails`: `GET /api/emails`, `GET /api/emails/:id`, `POST /api/emails`
+- [x] Add rate limiting middleware (e.g. `express-rate-limit`)
 
 **Done when:** you can register/login and get a JWT, and use it to create + list emails via Postman/Bruno.
 
@@ -41,13 +41,13 @@ This breaks the project into 8 sequential phases mapped to a 3–4 day build. Ea
 ## Phase 2 — AI Integration (Claude)
 **Goal:** Claude reliably turns raw email text into structured, categorized data.
 
-- [ ] Set up Anthropic API client with key from env
-- [ ] Design prompt template for extraction + classification + priority (Sales/Support/Billing/Complaint/General Inquiry/Spam; Low/Medium/High/Critical)
-- [ ] Implement `POST /api/ai/analyze`: input raw email → output `{ customerName, company, email, phone, issueSummary, requestedAction, category, priority, summary }`
-- [ ] Implement `POST /api/ai/reply`: input analyzed email → output a drafted professional response
-- [ ] Add Claude timeout + retry handling, log failures to `workflow_logs`
-- [ ] Store prompt templates in a config/DB table so they're editable without redeploying (feeds Module 5 Settings)
-- [ ] Document prompt-injection mitigation: how untrusted email content is delimited/constrained in the prompt (feeds §17 Security)
+- [x] Set up Anthropic API client with key from env
+- [x] Design prompt template for extraction + classification + priority (Sales/Support/Billing/Complaint/General Inquiry/Spam; Low/Medium/High/Critical)
+- [x] Implement `POST /api/ai/analyze`: input raw email → output `{ customerName, company, email, phone, issueSummary, requestedAction, category, priority, summary }`
+- [x] Implement `POST /api/ai/reply`: input analyzed email → output a drafted professional response
+- [x] Add Claude timeout + retry handling, log failures to `workflow_logs`
+- [x] Store prompt templates in a config/DB table so they're editable without redeploying (feeds Module 5 Settings)
+- [x] Document prompt-injection mitigation: how untrusted email content is delimited/constrained in the prompt (feeds §17 Security)
 
 **Done when:** posting a sample email body to `/api/ai/analyze` reliably returns structured, correctly categorized JSON, and `/api/ai/reply` returns a coherent draft.
 

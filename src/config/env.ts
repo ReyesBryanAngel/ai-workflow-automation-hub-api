@@ -13,6 +13,9 @@ export const env = {
   port: Number(requireEnv('PORT', '4000')),
   databaseUrl: process.env.DATABASE_URL ?? '',
   jwtSecret: process.env.JWT_SECRET ?? '',
+  jwtExpiresIn: requireEnv('JWT_EXPIRES_IN', '1d'),
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL ?? '',
+  adminEmail: requireEnv('ADMIN_EMAIL', 'admin@example.com'),
+  adminPassword: requireEnv('ADMIN_PASSWORD', 'change-me-please'),
 };

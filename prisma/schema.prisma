@@ -11,3 +11,86 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+enum EmailCategory {
+  SALES
+  SUPPORT
+  BILLING
+  COMPLAINT
+  GENERAL_INQUIRY
+  SPAM
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum EmailStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+enum WorkflowStatus {
+  SUCCESS
+  FAILED
+  RETRYING
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  @@map("users")
+}
+
+model Email {
+  id        Int            @id @default(autoincrement())
+  sender    String
+  subject   String
+  body      String
+  category  EmailCategory?
+  priority  Priority?
+  summary   String?
+  status    EmailStatus    @default(PENDING)
+  createdAt DateTime       @default(now())
+
+  crmRecords   CrmRecord[]
+  workflowLogs WorkflowLog[]
+
+  @@map("emails")
+}
+
+model WorkflowLog {
+  id            Int            @id @default(autoincrement())
+  workflow      String
+  status        WorkflowStatus
+  executionTime Int?
+  error         String?
+  retryCount    Int            @default(0)
+  createdAt     DateTime       @default(now())
+
+  email   Email? @relation(fields: [emailId], references: [id])
+  emailId Int?
+
+  @@map("workflow_logs")
+}
+
+model CrmRecord {
+  id           Int      @id @default(autoincrement())
+  customerName String
+  email        String
+  company      String?
+  source       String
+  createdAt    DateTime @default(now())
+
+  sourceEmail   Email? @relation(fields: [sourceEmailId], references: [id])
+  sourceEmailId Int?
+
+  @@map("crm_records")
+}

@@ -14,6 +14,7 @@ import {
   anthropic,
 } from '../lib/anthropic.js';
 import { logger } from '../lib/logger.js';
+import { sendReplyEmail } from '../lib/mailer.js';
 import { prisma } from '../lib/prisma.js';
 import {
   buildEmailAnalysisUserPrompt,
@@ -113,7 +114,7 @@ export async function analyzeEmail(input: AnalyzeEmailInput): Promise<EmailAnaly
 }
 
 export async function draftEmailReply(input: EmailReplyInput): Promise<EmailReply> {
-  return withWorkflowLogging({ workflow: 'ai_reply', emailId: input.emailId }, async () => {
+  const draft = await withWorkflowLogging({ workflow: 'ai_reply', emailId: input.emailId }, async () => {
     const response = await anthropic.messages.parse(
       {
         model: ANTHROPIC_MODEL,
@@ -131,4 +132,31 @@ export async function draftEmailReply(input: EmailReplyInput): Promise<EmailRepl
 
     return response.parsed_output;
   });
+
+  if (!input.send) {
+    return { ...draft, sent: false };
+  }
+
+  try {
+    await sendReplyEmail({ to: input.sender, subject: draft.subject, body: draft.body });
+  } catch (error) {
+    await logWorkflowFailure({ workflow: 'ai_reply_send', emailId: input.emailId, error });
+    throw new AppError(
+      'Reply was drafted but failed to send',
+      502,
+      error instanceof Error ? error.message : undefined,
+    );
+  }
+
+  if (input.emailId) {
+    // The send already succeeded; a failure to record it must not be
+    // reported to the caller as a failed send.
+    await prisma.email
+      .update({ where: { id: input.emailId }, data: { repliedAt: new Date() } })
+      .catch((error: unknown) => {
+        logger.error({ err: error, emailId: input.emailId }, 'Failed to record repliedAt after sending reply');
+      });
+  }
+
+  return { ...draft, sent: true };
 }

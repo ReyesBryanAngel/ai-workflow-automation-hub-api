@@ -17,6 +17,11 @@ export const env = {
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL ?? '',
   n8nWebhookUrl: process.env.N8N_WEBHOOK_URL ?? '',
+  smtpHost: process.env.SMTP_HOST ?? '',
+  smtpPort: Number(process.env.SMTP_PORT ?? '587'),
+  smtpUser: process.env.SMTP_USER ?? '',
+  smtpPass: process.env.SMTP_PASS ?? '',
+  smtpFrom: process.env.SMTP_FROM ?? process.env.SMTP_USER ?? '',
   adminEmail: requireEnv('ADMIN_EMAIL', 'admin@example.com'),
   adminPassword: requireEnv('ADMIN_PASSWORD', 'change-me-please'),
 };

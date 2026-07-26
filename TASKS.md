@@ -56,11 +56,11 @@ This breaks the project into 8 sequential phases mapped to a 3–4 day build. Ea
 ## Phase 3 — n8n Automation Workflow
 **Goal:** The end-to-end pipeline runs without a human touching it.
 
-- [ ] Build n8n workflow: Webhook Trigger → HTTP Request (`/api/ai/analyze`) → IF (category/priority branch) → HTTP Request (save to DB / create email record) → HTTP Request (create CRM record, mock endpoint is fine) → Slack notification → Webhook response
-- [ ] Configure Slack incoming webhook, verify a test message lands in a channel
-- [ ] Add error branches in n8n: on failure, log to `workflow_logs` with error message and retry once before marking failed
-- [ ] Test with 3–5 varied sample emails (sales lead, angry complaint, billing question, spam) and confirm correct routing end-to-end
-- [ ] Export the workflow JSON into the repo (e.g. `/n8n/workflow.json`) so it's reviewable and re-importable
+- [x] Build n8n workflow: Webhook Trigger → HTTP Request (`/api/ai/analyze`) → IF (category/priority branch) → HTTP Request (save to DB / create email record) → HTTP Request (create CRM record, mock endpoint is fine) → Slack notification → Webhook response
+- [x] Configure Slack incoming webhook, verify a test message lands in a channel
+- [x] Add error branches in n8n: on failure, log to `workflow_logs` with error message and retry once before marking failed
+- [x] Test with 3–5 varied sample emails (sales lead, angry complaint, billing question, spam) and confirm correct routing end-to-end
+- [x] Export the workflow JSON into the repo (e.g. `/n8n/workflow.json`) so it's reviewable and re-importable
 
 **Done when:** hitting the n8n webhook with a raw email payload results in a DB row, a CRM record, and a Slack message — with failures visibly logged, not silently dropped.
 
@@ -69,7 +69,7 @@ This breaks the project into 8 sequential phases mapped to a 3–4 day build. Ea
 ## Phase 4 — MCP Server
 **Goal:** Business actions exposed as standardized tools an AI assistant can call.
 
-- [ ] Scaffold MCP server (can live inside the Express app or as a small sibling service)
+- [ ] Scaffold MCP server (can live inside the Express app)
 - [ ] Implement tools: `createLead()`, `updateTicket()`, `getCustomer()`, `sendSlackNotification()`, `generateReport()`
 - [ ] Expose `GET /mcp/tools` (tool manifest) and `POST /mcp/execute` (invoke by tool name + args)
 - [ ] Test tool invocation manually (Postman) and, if time allows, from an actual MCP client (e.g. Claude Desktop/Code) for the demo
@@ -81,9 +81,9 @@ This breaks the project into 8 sequential phases mapped to a 3–4 day build. Ea
 ## Phase 5 — Remaining Backend APIs
 **Goal:** Every endpoint the frontend needs actually exists and returns real data.
 
-- [ ] `GET /api/dashboard` — aggregate counts (today's emails, AI processed, sales leads, support tickets, failed workflows)
-- [ ] `GET /api/reports` — data for charts (emails/day, category distribution, priority distribution, workflow success rate)
-- [ ] `GET /api/workflows`, `POST /api/workflows/run` — list logs, manually trigger a workflow run
+- [x] `GET /api/dashboard` — aggregate counts (today's emails, AI processed, sales leads, support tickets, failed workflows)
+- [x] `GET /api/reports` — data for charts (emails/day, category distribution, priority distribution, workflow success rate)
+- [x] `GET /api/workflows`, `POST /api/workflows/run` — list logs, manually trigger a workflow run
 - [ ] Wire up Swagger/OpenAPI docs (e.g. `swagger-jsdoc` + `swagger-ui-express`) covering all routes, served at `/docs`
 
 **Done when:** every route in doc §12 is implemented, documented in Swagger, and returns real (not mocked) data from Postgres.

@@ -39,13 +39,19 @@ export const emailReplyInputSchema = emailAnalysisSchema.extend({
   subject: z.string().min(1),
   body: z.string().min(1),
   emailId: z.coerce.number().int().positive().optional(),
+  // Drafting is always safe to auto-run; actually emailing the sender is the
+  // "explicit action" the injection-mitigation doc (§17) requires, so it's
+  // opt-in per request rather than a side effect of every /ai/reply call.
+  send: z.coerce.boolean().optional().default(false),
 });
 
 export type EmailReplyInput = z.infer<typeof emailReplyInputSchema>;
 
+// The shape Claude's structured output must match — kept separate from
+// EmailReply below so the model is never asked to produce `sent`.
 export const emailReplySchema = z.object({
   subject: z.string(),
   body: z.string(),
 });
 
-export type EmailReply = z.infer<typeof emailReplySchema>;
+export type EmailReply = z.infer<typeof emailReplySchema> & { sent: boolean };

@@ -59,6 +59,7 @@ model Email {
   summary   String?
   status    EmailStatus    @default(PENDING)
   createdAt DateTime       @default(now())
+  repliedAt DateTime?
 
   crmRecords   CrmRecord[]
   workflowLogs WorkflowLog[]

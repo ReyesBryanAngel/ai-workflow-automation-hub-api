@@ -16,6 +16,7 @@ export const env = {
   jwtExpiresIn: requireEnv('JWT_EXPIRES_IN', '1d'),
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
   slackWebhookUrl: process.env.SLACK_WEBHOOK_URL ?? '',
+  n8nWebhookUrl: process.env.N8N_WEBHOOK_URL ?? '',
   adminEmail: requireEnv('ADMIN_EMAIL', 'admin@example.com'),
   adminPassword: requireEnv('ADMIN_PASSWORD', 'change-me-please'),
 };

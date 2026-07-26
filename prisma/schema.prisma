@@ -83,7 +83,7 @@ model WorkflowLog {
 
 model CrmRecord {
   id           Int      @id @default(autoincrement())
-  customerName String
+  customerName String?
   email        String
   company      String?
   source       String

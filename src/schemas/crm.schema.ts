@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const createCrmRecordSchema = z.object({
-  customerName: z.string().min(1),
+  customerName: z.string().nullable(),
   email: z.email(),
   company: z.string().optional(),
   source: z.string().min(1),

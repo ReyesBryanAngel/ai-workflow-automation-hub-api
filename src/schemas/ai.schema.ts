@@ -18,6 +18,12 @@ export type EmailAnalysis = z.infer<typeof emailAnalysisSchema>;
 
 export const analyzeEmailInputSchema = z.object({
   sender: z.email(),
+  // The From header's display name (e.g. "Bry Reyes" from `Bry Reyes
+  // <reyesangelbryan@gmail.com>`), when the mail client/n8n provides one.
+  // `sender` above is deliberately the bare address only (validated as an
+  // email), so this is the one place a real customer name reaches the model
+  // when the body/signature itself doesn't state one.
+  senderName: z.string().trim().min(1).optional(),
   subject: z.string().min(1),
   body: z.string().min(1),
   // Present when the email already has a DB row (e.g. re-analysis) so the

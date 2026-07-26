@@ -34,6 +34,7 @@ Assign exactly one priority:
 
 ## Extraction rules
 - Extract contact fields (customerName, company, email, phone) only when explicitly present in the email; use null when not present or not determinable. Do not invent values.
+- If a <sender_name> tag is present, treat it as the explicit customerName unless it is clearly not a person's name (e.g. a company name, team alias, or address like "no-reply" or "support"). Otherwise fall back to a name explicitly stated in the subject, body, or signature.
 - issueSummary: one factual sentence describing what the sender is asking about or reporting.
 - requestedAction: the concrete action the sender wants taken, in the sender's own terms (e.g. "wants a refund", "needs a demo scheduled"). If none is stated, describe what response would resolve the email.
 - summary: a 3-5 sentence neutral summary of the email suitable for a support agent who has not read the original.
@@ -49,11 +50,14 @@ export function getEmailAnalysisSystemPrompt(): Promise<string> {
 
 export function buildEmailAnalysisUserPrompt(email: {
   sender: string;
+  senderName?: string;
   subject: string;
   body: string;
 }): string {
+  const senderNameTag = email.senderName ? `\n<sender_name>${email.senderName}</sender_name>` : '';
+
   return `<email>
-<sender>${email.sender}</sender>
+<sender>${email.sender}</sender>${senderNameTag}
 <subject>${email.subject}</subject>
 <email_body>
 ${email.body}

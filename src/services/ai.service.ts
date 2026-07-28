@@ -33,6 +33,7 @@ import type {
   EmailReplyInput,
 } from '../schemas/ai.schema.js';
 import { AppError } from '../utils/AppError.js';
+import { searchArticles } from './knowledgeBase.service.js';
 
 const REQUEST_OPTIONS = {
   timeout: ANTHROPIC_REQUEST_TIMEOUT_MS,
@@ -115,12 +116,26 @@ export async function analyzeEmail(input: AnalyzeEmailInput): Promise<EmailAnaly
 
 export async function draftEmailReply(input: EmailReplyInput): Promise<EmailReply> {
   const draft = await withWorkflowLogging({ workflow: 'ai_reply', emailId: input.emailId }, async () => {
+    // Basic RAG: retrieve KB articles relevant to this email's category and
+    // issue before drafting, so the reply can be grounded in real reference
+    // content instead of the model inventing policy specifics. A retrieval
+    // failure must never block reply drafting — fall back to ungrounded.
+    let knowledgeArticles: Awaited<ReturnType<typeof searchArticles>> = [];
+    try {
+      knowledgeArticles = await searchArticles({
+        category: input.category,
+        query: `${input.issueSummary} ${input.summary}`,
+      });
+    } catch (error) {
+      logger.warn({ err: error }, 'Knowledge base retrieval failed, drafting reply ungrounded');
+    }
+
     const response = await anthropic.messages.parse(
       {
         model: ANTHROPIC_MODEL,
         max_tokens: 1024,
         system: await getEmailReplySystemPrompt(),
-        messages: [{ role: 'user', content: buildEmailReplyUserPrompt(input) }],
+        messages: [{ role: 'user', content: buildEmailReplyUserPrompt(input, knowledgeArticles) }],
         output_config: { format: emailReplyOutputFormat },
       },
       REQUEST_OPTIONS,

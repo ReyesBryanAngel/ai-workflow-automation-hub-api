@@ -96,6 +96,21 @@ model CrmRecord {
   @@map("crm_records")
 }
 
+// Internal reference content used to ground POST /api/ai/reply drafts (basic
+// RAG: retrieved via Postgres full-text search in knowledgeBase.service.ts,
+// filtered/boosted by category, then injected into the reply prompt as
+// trusted context — distinct from the untrusted <email_body> content).
+model KnowledgeArticle {
+  id        Int            @id @default(autoincrement())
+  title     String
+  content   String
+  category  EmailCategory?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@map("knowledge_articles")
+}
+
 // DB-backed override for the Claude system prompts in src/prompts, keyed by
 // PromptTemplateKey. Lets Module 5 Settings edit prompt wording without a
 // redeploy; absence of a row (or isActive=false) falls back to the

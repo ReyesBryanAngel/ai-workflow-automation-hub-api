@@ -52,6 +52,11 @@ export type EmailReplyInput = z.infer<typeof emailReplyInputSchema>;
 export const emailReplySchema = z.object({
   subject: z.string(),
   body: z.string(),
+  // Titles of the <knowledge_base> articles (see emailReply.prompt.ts) the
+  // model actually relied on for factual claims. Empty when no retrieved
+  // article was relevant or none were provided — lets the caller show what
+  // the reply is grounded in instead of just asserting it's grounded.
+  sourcesUsed: z.array(z.string()),
 });
 
 export type EmailReply = z.infer<typeof emailReplySchema> & { sent: boolean };

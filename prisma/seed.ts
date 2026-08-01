@@ -4,6 +4,7 @@ import { hashPassword } from '../src/lib/password.js';
 import { prisma } from '../src/lib/prisma.js';
 import { DEFAULT_EMAIL_ANALYSIS_SYSTEM_PROMPT } from '../src/prompts/emailAnalysis.prompt.js';
 import { DEFAULT_EMAIL_REPLY_SYSTEM_PROMPT } from '../src/prompts/emailReply.prompt.js';
+import { DEFAULT_INVOICE_EXTRACTION_SYSTEM_PROMPT } from '../src/prompts/invoiceExtraction.prompt.js';
 import { PromptTemplateKey } from '../src/services/promptTemplate.service.js';
 
 // Seed knowledge base content used to ground POST /api/ai/reply drafts (see
@@ -85,7 +86,20 @@ async function main() {
     },
   });
 
-  console.log('Seeded prompt templates: email_analysis_system, email_reply_system');
+  await prisma.promptTemplate.upsert({
+    where: { key: PromptTemplateKey.INVOICE_EXTRACTION_SYSTEM },
+    update: {},
+    create: {
+      key: PromptTemplateKey.INVOICE_EXTRACTION_SYSTEM,
+      description:
+        'System prompt for invoice field extraction (LlamaParse text + Claude PDF fallback)',
+      content: DEFAULT_INVOICE_EXTRACTION_SYSTEM_PROMPT,
+    },
+  });
+
+  console.log(
+    'Seeded prompt templates: email_analysis_system, email_reply_system, invoice_extraction_system',
+  );
 
   // `title` has no unique constraint, so this finds-then-creates rather than
   // upserting, so reseeding doesn't duplicate rows.

@@ -1,11 +1,3 @@
-import {
-  APIConnectionError,
-  APIConnectionTimeoutError,
-  APIError,
-  InternalServerError,
-  RateLimitError,
-} from '@anthropic-ai/sdk';
-
 import { WorkflowStatus } from '../generated/prisma/enums.js';
 import {
   ANTHROPIC_MAX_RETRIES,
@@ -13,6 +5,7 @@ import {
   ANTHROPIC_REQUEST_TIMEOUT_MS,
   anthropic,
 } from '../lib/anthropic.js';
+import { isRetryableAnthropicError, toAppError } from '../lib/anthropicErrors.js';
 import { logger } from '../lib/logger.js';
 import { sendReplyEmail } from '../lib/mailer.js';
 import { prisma } from '../lib/prisma.js';
@@ -39,25 +32,6 @@ const REQUEST_OPTIONS = {
   timeout: ANTHROPIC_REQUEST_TIMEOUT_MS,
   maxRetries: ANTHROPIC_MAX_RETRIES,
 };
-
-function isRetryableAnthropicError(error: unknown): boolean {
-  return (
-    error instanceof APIConnectionError ||
-    error instanceof RateLimitError ||
-    error instanceof InternalServerError
-  );
-}
-
-// Maps a thrown Claude/SDK error to a client-facing AppError. Ordered most
-// specific to least specific, per Anthropic SDK error-handling guidance.
-function toAppError(error: unknown): AppError {
-  if (error instanceof AppError) return error;
-  if (error instanceof APIConnectionTimeoutError) return new AppError('AI service timed out', 504);
-  if (error instanceof RateLimitError)
-    return new AppError('AI service is rate limited, try again shortly', 503);
-  if (error instanceof APIError) return new AppError('AI service request failed', 502);
-  return new AppError('AI request failed', 502);
-}
 
 async function logWorkflowFailure(params: {
   workflow: string;
@@ -115,38 +89,43 @@ export async function analyzeEmail(input: AnalyzeEmailInput): Promise<EmailAnaly
 }
 
 export async function draftEmailReply(input: EmailReplyInput): Promise<EmailReply> {
-  const draft = await withWorkflowLogging({ workflow: 'ai_reply', emailId: input.emailId }, async () => {
-    // Basic RAG: retrieve KB articles relevant to this email's category and
-    // issue before drafting, so the reply can be grounded in real reference
-    // content instead of the model inventing policy specifics. A retrieval
-    // failure must never block reply drafting — fall back to ungrounded.
-    let knowledgeArticles: Awaited<ReturnType<typeof searchArticles>> = [];
-    try {
-      knowledgeArticles = await searchArticles({
-        category: input.category,
-        query: `${input.issueSummary} ${input.summary}`,
-      });
-    } catch (error) {
-      logger.warn({ err: error }, 'Knowledge base retrieval failed, drafting reply ungrounded');
-    }
+  const draft = await withWorkflowLogging(
+    { workflow: 'ai_reply', emailId: input.emailId },
+    async () => {
+      // Basic RAG: retrieve KB articles relevant to this email's category and
+      // issue before drafting, so the reply can be grounded in real reference
+      // content instead of the model inventing policy specifics. A retrieval
+      // failure must never block reply drafting — fall back to ungrounded.
+      let knowledgeArticles: Awaited<ReturnType<typeof searchArticles>> = [];
+      try {
+        knowledgeArticles = await searchArticles({
+          category: input.category,
+          query: `${input.issueSummary} ${input.summary}`,
+        });
+      } catch (error) {
+        logger.warn({ err: error }, 'Knowledge base retrieval failed, drafting reply ungrounded');
+      }
 
-    const response = await anthropic.messages.parse(
-      {
-        model: ANTHROPIC_MODEL,
-        max_tokens: 1024,
-        system: await getEmailReplySystemPrompt(),
-        messages: [{ role: 'user', content: buildEmailReplyUserPrompt(input, knowledgeArticles) }],
-        output_config: { format: emailReplyOutputFormat },
-      },
-      REQUEST_OPTIONS,
-    );
+      const response = await anthropic.messages.parse(
+        {
+          model: ANTHROPIC_MODEL,
+          max_tokens: 1024,
+          system: await getEmailReplySystemPrompt(),
+          messages: [
+            { role: 'user', content: buildEmailReplyUserPrompt(input, knowledgeArticles) },
+          ],
+          output_config: { format: emailReplyOutputFormat },
+        },
+        REQUEST_OPTIONS,
+      );
 
-    if (!response.parsed_output) {
-      throw new AppError('Claude returned an empty or unparseable reply draft', 502);
-    }
+      if (!response.parsed_output) {
+        throw new AppError('Claude returned an empty or unparseable reply draft', 502);
+      }
 
-    return response.parsed_output;
-  });
+      return response.parsed_output;
+    },
+  );
 
   if (!input.send) {
     return { ...draft, sent: false };
@@ -169,7 +148,10 @@ export async function draftEmailReply(input: EmailReplyInput): Promise<EmailRepl
     await prisma.email
       .update({ where: { id: input.emailId }, data: { repliedAt: new Date() } })
       .catch((error: unknown) => {
-        logger.error({ err: error, emailId: input.emailId }, 'Failed to record repliedAt after sending reply');
+        logger.error(
+          { err: error, emailId: input.emailId },
+          'Failed to record repliedAt after sending reply',
+        );
       });
   }
 

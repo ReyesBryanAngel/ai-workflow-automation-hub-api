@@ -1,7 +1,49 @@
-import type { Invoice } from '../generated/prisma/client.js';
-import { InvoiceStatus, type InvoiceSourceType } from '../generated/prisma/enums.js';
+import type { MessageParam } from '@anthropic-ai/sdk/resources/messages';
+
+import { Prisma, type Invoice } from '../generated/prisma/client.js';
+import {
+  InvoiceStatus,
+  WorkflowStatus,
+  type InvoiceSourceType,
+} from '../generated/prisma/enums.js';
+import {
+  ANTHROPIC_MAX_RETRIES,
+  ANTHROPIC_MODEL,
+  ANTHROPIC_REQUEST_TIMEOUT_MS,
+  anthropic,
+} from '../lib/anthropic.js';
+import { isRetryableAnthropicError, toAppError } from '../lib/anthropicErrors.js';
+import { parseInvoiceDocument } from '../lib/llamaparse.js';
+import { logger } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
-import { saveFile } from '../lib/storage.js';
+import { readFile, saveFile } from '../lib/storage.js';
+import {
+  buildInvoiceExtractionDocumentUserContent,
+  buildInvoiceExtractionTextUserPrompt,
+  getInvoiceExtractionSystemPrompt,
+  invoiceExtractionOutputFormat,
+  isClaudeFallbackSupportedMediaType,
+} from '../prompts/invoiceExtraction.prompt.js';
+import {
+  isInvoiceExtractionIncomplete,
+  type InvoiceExtraction,
+} from '../schemas/invoice.schema.js';
+import { AppError } from '../utils/AppError.js';
+
+const REQUEST_OPTIONS = {
+  timeout: ANTHROPIC_REQUEST_TIMEOUT_MS,
+  maxRetries: ANTHROPIC_MAX_RETRIES,
+};
+
+// Below this self-reported confidence, the LlamaParse-derived extraction is
+// treated as unreliable and the Claude-PDF fallback runs instead — same
+// trigger as an incomplete required field (see isInvoiceExtractionIncomplete).
+const CONFIDENCE_THRESHOLD = 0.5;
+
+const EXTRACTION_WORKFLOW = {
+  LLAMAPARSE: 'invoice_extract_llamaparse',
+  CLAUDE_PDF_FALLBACK: 'invoice_extract_claude_pdf_fallback',
+} as const;
 
 // Entry point for every intake channel (manual upload, n8n Gmail branch,
 // n8n Drive branch — Phase 9.2). The file is persisted to storage before the
@@ -19,7 +61,7 @@ export async function createInvoiceFromUpload(params: {
     mimeType: params.mimeType,
   });
 
-  return prisma.invoice.create({
+  const invoice = await prisma.invoice.create({
     data: {
       storageKey,
       documentUrl,
@@ -27,4 +69,271 @@ export async function createInvoiceFromUpload(params: {
       status: InvoiceStatus.PENDING,
     },
   });
+
+  // Post-upload hook (Phase 9.3): extraction runs automatically right after
+  // the file lands, so intake never depends on a human or an n8n workflow
+  // (not built yet for invoices — see Phase 9.7) to kick it off. Extraction
+  // failures are already logged to workflow_logs inside extractInvoice()
+  // (both attempted paths); a failure here must not fail the upload
+  // response, since the file is safely stored and the row exists — it just
+  // stays PENDING with fields unfilled, same as if extraction hadn't run
+  // yet, ready for a future manual/n8n retry.
+  try {
+    return await extractInvoice(invoice.id);
+  } catch (error) {
+    logger.warn(
+      { err: error, invoiceId: invoice.id },
+      'Invoice extraction failed after upload; invoice remains PENDING with fields unfilled',
+    );
+    return invoice;
+  }
+}
+
+const EXTENSION_MIME_TYPES: Record<string, string> = {
+  pdf: 'application/pdf',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  tiff: 'image/tiff',
+  tif: 'image/tiff',
+  heic: 'image/heic',
+};
+
+// The Invoice row doesn't persist the original mimetype, only storageKey —
+// storage.ts always keys stored files as `invoices/{uuid}.{ext}` using the
+// original upload's extension specifically so it can be recovered later for
+// exactly this kind of use (LlamaParse's fileName hint, Claude fallback's
+// media_type). Throws if the key has no recognizable extension.
+function inferMimeType(storageKey: string): string {
+  const ext = storageKey.includes('.') ? storageKey.split('.').pop()?.toLowerCase() : undefined;
+  const mimeType = ext ? EXTENSION_MIME_TYPES[ext] : undefined;
+  if (!mimeType) {
+    throw new Error(`Cannot determine file type for extraction from storage key: ${storageKey}`);
+  }
+  return mimeType;
+}
+
+async function logWorkflowEvent(params: {
+  workflow: string;
+  status: WorkflowStatus;
+  executionTime?: number;
+  error?: unknown;
+}): Promise<void> {
+  try {
+    await prisma.workflowLog.create({
+      data: {
+        workflow: params.workflow,
+        status: params.status,
+        executionTime: params.executionTime,
+        error:
+          params.error !== undefined
+            ? params.error instanceof Error
+              ? params.error.message
+              : String(params.error)
+            : undefined,
+        retryCount:
+          params.error !== undefined && isRetryableAnthropicError(params.error)
+            ? ANTHROPIC_MAX_RETRIES
+            : 0,
+      },
+    });
+  } catch (logError) {
+    // A logging failure must never mask the original extraction result.
+    logger.error(
+      { err: logError, workflow: params.workflow },
+      'Failed to write workflow_logs entry',
+    );
+  }
+}
+
+async function runInvoiceExtraction(
+  userContent: MessageParam['content'],
+): Promise<InvoiceExtraction> {
+  const response = await anthropic.messages.parse(
+    {
+      model: ANTHROPIC_MODEL,
+      max_tokens: 1024,
+      system: await getInvoiceExtractionSystemPrompt(),
+      messages: [{ role: 'user', content: userContent }],
+      output_config: { format: invoiceExtractionOutputFormat },
+    },
+    REQUEST_OPTIONS,
+  );
+
+  if (!response.parsed_output) {
+    throw new Error('Claude returned an empty or unparseable invoice extraction');
+  }
+
+  return response.parsed_output;
+}
+
+function toInvoiceUpdateData(extraction: InvoiceExtraction): Prisma.InvoiceUpdateInput {
+  return {
+    invoiceNumber: extraction.invoiceNumber,
+    vendor: extraction.vendor,
+    invoiceDate: extraction.invoiceDate ? new Date(extraction.invoiceDate) : null,
+    dueDate: extraction.dueDate ? new Date(extraction.dueDate) : null,
+    subtotal: extraction.subtotal !== null ? new Prisma.Decimal(extraction.subtotal) : null,
+    tax: extraction.tax !== null ? new Prisma.Decimal(extraction.tax) : null,
+    total: extraction.total !== null ? new Prisma.Decimal(extraction.total) : null,
+    ...(extraction.currency ? { currency: extraction.currency } : {}),
+  };
+}
+
+interface ExtractionResult {
+  extraction: InvoiceExtraction;
+  workflow: (typeof EXTRACTION_WORKFLOW)[keyof typeof EXTRACTION_WORKFLOW];
+}
+
+// Primary path. Returns undefined (never throws) whenever LlamaParse or the
+// subsequent Claude call fails, or the result is incomplete/low-confidence —
+// any of those cases means the caller should fall back to the direct-PDF
+// path instead of failing extraction outright.
+async function tryLlamaparseExtraction(params: {
+  invoiceId: number;
+  buffer: Buffer;
+  storageKey: string;
+  mimeType: string;
+  executionTimeStartedAt: number;
+}): Promise<ExtractionResult | undefined> {
+  try {
+    const documentText = await parseInvoiceDocument({
+      buffer: params.buffer,
+      fileName: params.storageKey,
+      mimeType: params.mimeType,
+    });
+    const extraction = await runInvoiceExtraction(
+      buildInvoiceExtractionTextUserPrompt(documentText),
+    );
+
+    if (
+      extraction.confidence >= CONFIDENCE_THRESHOLD &&
+      !isInvoiceExtractionIncomplete(extraction)
+    ) {
+      return { extraction, workflow: EXTRACTION_WORKFLOW.LLAMAPARSE };
+    }
+
+    logger.warn(
+      { invoiceId: params.invoiceId, confidence: extraction.confidence },
+      'LlamaParse extraction incomplete or low-confidence, falling back to Claude PDF extraction',
+    );
+    // Logged as a failure of the llamaparse path specifically (distinct from
+    // an unhandled exception below) so the two are equally visible when
+    // comparing how often each extraction path actually delivers a usable
+    // result — the whole point of tracking this per-path in workflow_logs.
+    await logWorkflowEvent({
+      workflow: EXTRACTION_WORKFLOW.LLAMAPARSE,
+      status: WorkflowStatus.FAILED,
+      executionTime: Date.now() - params.executionTimeStartedAt,
+      error: `Incomplete or low-confidence extraction (confidence=${extraction.confidence})`,
+    });
+    return undefined;
+  } catch (error) {
+    logger.warn(
+      { err: error, invoiceId: params.invoiceId },
+      'LlamaParse extraction failed, falling back to Claude PDF extraction',
+    );
+    await logWorkflowEvent({
+      workflow: EXTRACTION_WORKFLOW.LLAMAPARSE,
+      status: WorkflowStatus.FAILED,
+      executionTime: Date.now() - params.executionTimeStartedAt,
+      error,
+    });
+    return undefined;
+  }
+}
+
+// Fallback path: the original file sent straight to Claude. Logs and throws
+// on any failure — there is nothing left to fall back to after this.
+async function runClaudeFallbackExtraction(params: {
+  buffer: Buffer;
+  mimeType: string;
+  executionTimeStartedAt: number;
+}): Promise<ExtractionResult> {
+  if (!isClaudeFallbackSupportedMediaType(params.mimeType)) {
+    const error = new AppError(
+      `Invoice extraction failed: LlamaParse was unavailable/unreliable and file type ${params.mimeType} has no direct Claude fallback`,
+      502,
+    );
+    await logWorkflowEvent({
+      workflow: EXTRACTION_WORKFLOW.CLAUDE_PDF_FALLBACK,
+      status: WorkflowStatus.FAILED,
+      executionTime: Date.now() - params.executionTimeStartedAt,
+      error,
+    });
+    throw error;
+  }
+
+  try {
+    const extraction = await runInvoiceExtraction(
+      buildInvoiceExtractionDocumentUserContent(params.buffer.toString('base64'), params.mimeType),
+    );
+    return { extraction, workflow: EXTRACTION_WORKFLOW.CLAUDE_PDF_FALLBACK };
+  } catch (error) {
+    await logWorkflowEvent({
+      workflow: EXTRACTION_WORKFLOW.CLAUDE_PDF_FALLBACK,
+      status: WorkflowStatus.FAILED,
+      executionTime: Date.now() - params.executionTimeStartedAt,
+      error,
+    });
+    throw toAppError(error);
+  }
+}
+
+// Runs the OCR/field-extraction pipeline for a stored invoice: LlamaParse
+// text extraction feeding Claude (primary path) with an automatic fallback
+// to sending the original file straight to Claude as a document/image block
+// when LlamaParse fails, returns incomplete required fields, or reports low
+// confidence (TASKS.md 9.3). Whichever path produces a usable result wins;
+// the Invoice row is updated with the extracted fields and stays otherwise
+// untouched (duplicate/vendor/PO matching and status transitions are
+// Phase 9.4, not this function's job).
+export async function extractInvoice(invoiceId: number): Promise<Invoice> {
+  const executionTimeStartedAt = Date.now();
+
+  let invoice: Invoice;
+  let buffer: Buffer;
+  let mimeType: string;
+  try {
+    invoice = await prisma.invoice.findUniqueOrThrow({ where: { id: invoiceId } });
+    buffer = await readFile(invoice.storageKey);
+    mimeType = inferMimeType(invoice.storageKey);
+  } catch (error) {
+    await logWorkflowEvent({
+      workflow: 'invoice_extract_setup',
+      status: WorkflowStatus.FAILED,
+      executionTime: Date.now() - executionTimeStartedAt,
+      error,
+    });
+    throw error instanceof AppError
+      ? error
+      : new AppError(
+          'Invoice extraction failed while loading the stored document',
+          502,
+          error instanceof Error ? error.message : String(error),
+        );
+  }
+
+  const result =
+    (await tryLlamaparseExtraction({
+      invoiceId,
+      buffer,
+      storageKey: invoice.storageKey,
+      mimeType,
+      executionTimeStartedAt,
+    })) ?? (await runClaudeFallbackExtraction({ buffer, mimeType, executionTimeStartedAt }));
+
+  const updated = await prisma.invoice.update({
+    where: { id: invoiceId },
+    data: toInvoiceUpdateData(result.extraction),
+  });
+
+  await logWorkflowEvent({
+    workflow: result.workflow,
+    status: WorkflowStatus.SUCCESS,
+    executionTime: Date.now() - executionTimeStartedAt,
+  });
+
+  return updated;
 }

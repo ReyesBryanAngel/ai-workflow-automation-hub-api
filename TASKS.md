@@ -164,12 +164,13 @@ This breaks the project into 8 sequential phases mapped to a 3–4 day build, pl
 ### 9.3 — OCR & Field Extraction
 - [ ] `schemas/invoice.schema.ts` — Zod schema matching the draft `InvoiceSchema`, `Decimal`-safe on the wire
 - [ ] `prompts/invoiceExtraction.prompt.ts` — system prompt for structured extraction, same untrusted-content framing pattern as `emailAnalysis.prompt.ts` (the invoice file is attacker-controllable input, same as an email body)
-- [ ] `services/invoice.service.ts`: `extractInvoice()` — primary path sends the PDF directly to Claude as a document input block, using the same `anthropic.messages.parse` + `zodOutputFormat` + `withWorkflowLogging` pattern as `ai.service.ts`
-- [ ] `lib/llamaparse.ts` — LlamaParse client; fallback path when Claude extraction throws, returns null/incomplete required fields, or confidence is low: run LlamaParse OCR first, then feed the extracted text through the same Claude structured-extraction call
-- [ ] Log which extraction path was used (`claude_pdf` vs `llamaparse_fallback`) on the `WorkflowLog` row — needed later to judge whether LlamaParse is pulling its weight
+- [ ] `lib/llamaparse.ts` — LlamaParse client; primary extraction path performs OCR/text extraction and returns structured markdown/text for downstream processing
+- [ ] `services/invoice.service.ts`: `extractInvoice()` — primary path sends the LlamaParse output to Claude using the same `anthropic.messages.parse` + `zodOutputFormat` + `withWorkflowLogging` pattern as `ai.service.ts`
+- [ ] Fallback path: if LlamaParse fails, returns incomplete required fields, or extraction confidence is low, send the original PDF directly to Claude as a document input block and perform the same structured extraction
+- [ ] Log which extraction path was used (`llamaparse` vs `claude_pdf_fallback`) on the `WorkflowLog` row — needed later to evaluate whether LlamaParse is providing measurable value
 - [ ] Wire into intake: extraction runs automatically after a file is stored (n8n step or a post-upload hook)
 
-**Done when:** a sample invoice PDF reliably produces a filled `Invoice` row via the Claude-native path, and deliberately feeding a scanned/low-quality image invoice triggers the LlamaParse fallback and still produces a filled row.
+**Done when:** a sample invoice PDF reliably produces a filled `Invoice` row through the LlamaParse → Claude pipeline, and intentionally forcing a LlamaParse failure or low-confidence extraction automatically falls back to the Claude PDF document path and still produces a filled row.
 
 ---
 

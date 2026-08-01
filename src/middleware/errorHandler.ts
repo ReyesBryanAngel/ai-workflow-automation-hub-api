@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
+import { MulterError } from 'multer';
 import { ZodError } from 'zod';
 
 import { logger } from '../lib/logger.js';
@@ -9,6 +10,11 @@ export function notFoundHandler(req: Request, _res: Response, next: NextFunction
 }
 
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction): void {
+  if (err instanceof MulterError) {
+    res.status(400).json({ error: `Upload rejected: ${err.message}` });
+    return;
+  }
+
   if (err instanceof ZodError) {
     res.status(400).json({
       error: 'Validation failed',

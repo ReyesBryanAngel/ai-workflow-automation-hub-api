@@ -3,7 +3,7 @@
 
 > Scope decisions baked into this plan: JWT auth is a **core** deliverable (not optional). n8n is **self-hosted** locally, so a setup task is included. Docker remains optional/stretch.
 
-This breaks the project into 8 sequential phases mapped to a 3–4 day build. Each phase lists concrete tasks and a "Done when" checkpoint so you always know if you can move on. Work top to bottom — later phases assume earlier ones are functional.
+This breaks the project into 8 sequential phases mapped to a 3–4 day build, plus **Phase 9**, an invoice-processing extension module scoped separately (it's not in `project-documentation.md` — it's a follow-on module sized roughly like Phases 1–3 combined). Each phase lists concrete tasks and a "Done when" checkpoint so you always know if you can move on. Work top to bottom — later phases assume earlier ones are functional.
 
 ---
 
@@ -132,6 +132,83 @@ This breaks the project into 8 sequential phases mapped to a 3–4 day build. Ea
 - [ ] Prep interview talking points (doc §19) — rehearse the business-analysis framing, not just the tech
 
 **Done when:** a stranger could clone the repo, follow the README, and reproduce the demo end-to-end.
+
+---
+
+## Phase 9 — Invoice Processing Module (Extension)
+**Goal:** Automate invoice intake → extraction → matching → approval → export → payment scheduling, reusing the AI-extraction and workflow-logging spine already built in Phases 1–3 rather than building a parallel system.
+
+> Scope decisions: Claude's native PDF input is the primary extraction path; **LlamaParse is wired in as a second OCR vendor** (fallback when Claude extraction fails or returns low-confidence/incomplete fields). Payment scheduling and archiving run off **n8n's own cron trigger**, not an in-app scheduler. Money fields use Prisma `Decimal`, not `Float` — nothing else in the schema stores currency today, so this is a new precision requirement, not a style choice.
+
+### 9.1 — Data Model & Storage
+- [x] Prisma models: `Invoice`, `Vendor`, `PurchaseOrder`; enums `InvoiceStatus` (PENDING, DUPLICATE, NEEDS_REVIEW, APPROVED, REJECTED, EXPORTED, PAID, ARCHIVED)
+- [x] `Invoice` fields per draft schema (`invoiceNumber`, `vendor`, `invoiceDate`, `dueDate`, `subtotal`, `tax`, `total`, `currency`) using `Decimal` for money fields
+- [x] Add `storageKey`/`documentUrl` + `sourceType` (EMAIL/DRIVE/UPLOAD/API) to `Invoice`
+- [x] Choose and wire a storage lib (`lib/storage.ts`) — S3-compatible bucket, or local disk for the prototype — nothing like this exists in the codebase yet (no multer/AWS SDK today)
+- [x] Migration + verify tables in Postgres
+
+**Done when:** you can insert an `Invoice` row referencing a stored file and query it back with correct decimal precision on the money fields.
+
+---
+
+### 9.2 — Document Intake
+- [x] `POST /api/invoices/upload` — manual upload form/API path (multipart), stores the original file via `lib/storage.ts` before anything else, creates `Invoice` row with `status: PENDING`
+- [ ] n8n branch: Gmail attachment trigger (separate from the existing email-triage workflow) — detect invoice-looking attachments, download, POST to the upload endpoint
+- [ ] n8n branch: Google Drive trigger (new file in a watched folder) — download, POST to the upload endpoint
+- [x] Reject/flag non-PDF/image uploads early with a clear validation error (Zod + mimetype check)
+
+**Done when:** dropping a PDF into the watched Drive folder, emailing one, or POSTing one directly all result in a stored file + a `PENDING` `Invoice` row.
+
+---
+
+### 9.3 — OCR & Field Extraction
+- [ ] `schemas/invoice.schema.ts` — Zod schema matching the draft `InvoiceSchema`, `Decimal`-safe on the wire
+- [ ] `prompts/invoiceExtraction.prompt.ts` — system prompt for structured extraction, same untrusted-content framing pattern as `emailAnalysis.prompt.ts` (the invoice file is attacker-controllable input, same as an email body)
+- [ ] `services/invoice.service.ts`: `extractInvoice()` — primary path sends the PDF directly to Claude as a document input block, using the same `anthropic.messages.parse` + `zodOutputFormat` + `withWorkflowLogging` pattern as `ai.service.ts`
+- [ ] `lib/llamaparse.ts` — LlamaParse client; fallback path when Claude extraction throws, returns null/incomplete required fields, or confidence is low: run LlamaParse OCR first, then feed the extracted text through the same Claude structured-extraction call
+- [ ] Log which extraction path was used (`claude_pdf` vs `llamaparse_fallback`) on the `WorkflowLog` row — needed later to judge whether LlamaParse is pulling its weight
+- [ ] Wire into intake: extraction runs automatically after a file is stored (n8n step or a post-upload hook)
+
+**Done when:** a sample invoice PDF reliably produces a filled `Invoice` row via the Claude-native path, and deliberately feeding a scanned/low-quality image invoice triggers the LlamaParse fallback and still produces a filled row.
+
+---
+
+### 9.4 — Duplicate Check, Vendor/PO Matching, Risk Checks
+- [ ] Duplicate check: unique constraint / lookup on `(vendor, invoiceNumber)` before/after extraction; mark `status: DUPLICATE` and short-circuit the rest of the pipeline
+- [ ] Vendor matching: fuzzy match extracted vendor name against `Vendor` table; auto-link on confident match, flag `NEEDS_REVIEW` with no match, never silently create a new vendor from unverified extraction
+- [ ] PO matching: look up `PurchaseOrder` by extracted PO number (if present); compare invoice total against PO amount within a tolerance
+- [ ] Risk/exception rules (plain rule-based, not another Claude call): missing PO, amount mismatch beyond tolerance, new/unverified vendor, total above a configurable threshold — collect into an `exceptions: string[]` field, set `status: NEEDS_REVIEW` if any fire
+- [ ] Log each check's outcome to `workflow_logs` the same way AI steps do
+
+**Done when:** a duplicate invoice is caught before reaching approval, a mismatched-PO invoice is flagged with a specific reason, and a clean invoice with a matched PO and vendor sails through with no exceptions.
+
+---
+
+### 9.5 — Human Approval
+- [ ] Add a minimal `role` field to `User` (e.g. `ADMIN` / `APPROVER` / `MEMBER`) — today `requireAuth` only checks "has a valid JWT," there's no concept of authorization level anywhere in the app
+- [ ] `POST /api/invoices/:id/approve`, `POST /api/invoices/:id/reject` — role-gated (APPROVER/ADMIN only), rejection requires a reason
+- [ ] `GET /api/invoices?status=NEEDS_REVIEW` — review queue endpoint (a minimal API-level version of the "Manual Review Queue" stretch goal already listed below; a dedicated UI for it can stay a stretch item)
+- [ ] Slack notification when an invoice enters `NEEDS_REVIEW`, reusing `lib/slack.ts`
+
+**Done when:** an invoice flagged with an exception blocks at `NEEDS_REVIEW` until an APPROVER-role user explicitly approves or rejects it via the API — it never silently proceeds to export.
+
+---
+
+### 9.6 — Export & Payment Scheduling
+- [ ] `POST /api/invoices/:id/export` — mock accounting-system export, same pattern as the existing mock CRM integration (`crm.routes.ts:34-42`); sets `status: EXPORTED`
+- [ ] n8n cron-triggered workflow: on schedule, query `EXPORTED` invoices with an approaching `dueDate`, call a `POST /api/invoices/:id/schedule-payment` endpoint, then set `status: PAID` → `ARCHIVED`
+- [ ] Error branches on both the export call and the cron-triggered payment step, logged to `workflow_logs` like every other stage
+
+**Done when:** an approved invoice reaches `EXPORTED` via the API, and the n8n cron job picks it up on its own schedule and moves it to `PAID`/`ARCHIVED` without manual triggering.
+
+---
+
+### 9.7 — n8n Workflow Assembly
+- [ ] Build the full n8n workflow chaining 9.2 → 9.3 → 9.4 → 9.5 (notify + wait) → 9.6, mirroring the existing email pipeline's shape (webhook/trigger → HTTP requests → IF branches → Slack → error branch)
+- [ ] Test with a realistic small batch: a clean invoice, a duplicate, a PO-mismatched invoice, and a low-quality scan (forces the LlamaParse fallback)
+- [ ] Export the workflow JSON into the repo (e.g. `/n8n/invoice-workflow.json`)
+
+**Done when:** all four test invoices route correctly end-to-end with no manual intervention except the deliberate approval step.
 
 ---
 

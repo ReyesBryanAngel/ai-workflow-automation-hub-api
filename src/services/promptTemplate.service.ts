@@ -6,6 +6,7 @@ import { prisma } from '../lib/prisma.js';
 export const PromptTemplateKey = {
   EMAIL_ANALYSIS_SYSTEM: 'email_analysis_system',
   EMAIL_REPLY_SYSTEM: 'email_reply_system',
+  INVOICE_EXTRACTION_SYSTEM: 'invoice_extraction_system',
 } as const;
 
 export type PromptTemplateKey = (typeof PromptTemplateKey)[keyof typeof PromptTemplateKey];
@@ -37,7 +38,10 @@ export async function resolvePromptTemplate(
       content = template.content;
     }
   } catch (error) {
-    logger.warn({ err: error, key }, 'Failed to load prompt template from DB, using built-in default');
+    logger.warn(
+      { err: error, key },
+      'Failed to load prompt template from DB, using built-in default',
+    );
   }
 
   cache.set(key, { content, expiresAt: Date.now() + CACHE_TTL_MS });

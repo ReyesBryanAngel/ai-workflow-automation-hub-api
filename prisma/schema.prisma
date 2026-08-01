@@ -40,6 +40,24 @@ enum WorkflowStatus {
   RETRYING
 }
 
+enum InvoiceStatus {
+  PENDING
+  DUPLICATE
+  NEEDS_REVIEW
+  APPROVED
+  REJECTED
+  EXPORTED
+  PAID
+  ARCHIVED
+}
+
+enum InvoiceSourceType {
+  EMAIL
+  DRIVE
+  UPLOAD
+  API
+}
+
 model User {
   id           Int      @id @default(autoincrement())
   email        String   @unique
@@ -109,6 +127,56 @@ model KnowledgeArticle {
   updatedAt DateTime       @updatedAt
 
   @@map("knowledge_articles")
+}
+
+// Extracted invoice fields + document reference (Phase 9.1). Extraction
+// fields (invoiceNumber, vendor, dates, amounts) are nullable because a row
+// is created from the stored file at upload time, before the OCR/extraction
+// step (Phase 9.3) has run and filled them in.
+model Invoice {
+  id            Int       @id @default(autoincrement())
+  invoiceNumber String?
+  vendor        String?
+  invoiceDate   DateTime?
+  dueDate       DateTime?
+  subtotal      Decimal?  @db.Decimal(12, 2)
+  tax           Decimal?  @db.Decimal(12, 2)
+  total         Decimal?  @db.Decimal(12, 2)
+  currency      String    @default("USD")
+
+  status InvoiceStatus @default(PENDING)
+
+  storageKey  String
+  documentUrl String?
+  sourceType  InvoiceSourceType
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("invoices")
+}
+
+// Known vendors an extracted invoice can be fuzzy-matched against (Phase
+// 9.4). Deliberately not linked to Invoice yet — the matching relation is
+// introduced alongside the matching logic itself, not speculatively here.
+model Vendor {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  email     String?
+  createdAt DateTime @default(now())
+
+  @@map("vendors")
+}
+
+// Purchase orders an extracted invoice can be reconciled against (Phase
+// 9.4), same reasoning as Vendor above re: no Invoice relation yet.
+model PurchaseOrder {
+  id        Int      @id @default(autoincrement())
+  poNumber  String   @unique
+  amount    Decimal  @db.Decimal(12, 2)
+  createdAt DateTime @default(now())
+
+  @@map("purchase_orders")
 }
 
 // DB-backed override for the Claude system prompts in src/prompts, keyed by

@@ -24,4 +24,10 @@ export const env = {
   smtpFrom: process.env.SMTP_FROM ?? process.env.SMTP_USER ?? '',
   adminEmail: requireEnv('ADMIN_EMAIL', 'admin@example.com'),
   adminPassword: requireEnv('ADMIN_PASSWORD', 'change-me-please'),
+  s3Endpoint: process.env.S3_ENDPOINT ?? '',
+  s3Region: requireEnv('S3_REGION', 'us-east-1'),
+  s3Bucket: process.env.S3_BUCKET ?? '',
+  s3AccessKeyId: process.env.S3_ACCESS_KEY_ID ?? '',
+  s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? '',
+  s3ForcePathStyle: process.env.S3_FORCE_PATH_STYLE === 'true',
 };

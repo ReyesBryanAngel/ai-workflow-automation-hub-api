@@ -31,4 +31,10 @@ export const env = {
   s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? '',
   s3ForcePathStyle: process.env.S3_FORCE_PATH_STYLE === 'true',
   llamaParseApiKey: process.env.LLAMAPARSE_API_KEY ?? '',
+  // Phase 9.4 risk rules: invoices at/above this total are flagged
+  // NEEDS_REVIEW regardless of clean vendor/PO matches, and invoice totals
+  // are allowed to diverge from their matched PO amount by this fraction
+  // (0.05 = 5%) before an amount-mismatch exception fires.
+  invoiceRiskAmountThreshold: Number(requireEnv('INVOICE_RISK_AMOUNT_THRESHOLD', '10000')),
+  invoicePoTolerancePercent: Number(requireEnv('INVOICE_PO_TOLERANCE_PERCENT', '0.05')),
 };

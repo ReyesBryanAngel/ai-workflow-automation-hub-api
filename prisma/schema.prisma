@@ -137,6 +137,7 @@ model Invoice {
   id            Int       @id @default(autoincrement())
   invoiceNumber String?
   vendor        String?
+  poNumber      String?
   invoiceDate   DateTime?
   dueDate       DateTime?
   subtotal      Decimal?  @db.Decimal(12, 2)
@@ -145,6 +146,19 @@ model Invoice {
   currency      String    @default("USD")
 
   status InvoiceStatus @default(PENDING)
+
+  // Populated by the Phase 9.4 checks pipeline. vendorId is only set on a
+  // confident fuzzy match against Vendor — never auto-created from
+  // unverified extraction. purchaseOrderId is only set on an exact
+  // poNumber match against PurchaseOrder. exceptions collects human-readable
+  // reasons from the risk rules (missing PO, amount mismatch, unverified
+  // vendor, over-threshold total); a non-empty array means status is
+  // NEEDS_REVIEW.
+  matchedVendor   Vendor?        @relation(fields: [vendorId], references: [id])
+  vendorId        Int?
+  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  purchaseOrderId Int?
+  exceptions      String[]       @default([])
 
   storageKey  String
   documentUrl String?
@@ -157,24 +171,26 @@ model Invoice {
 }
 
 // Known vendors an extracted invoice can be fuzzy-matched against (Phase
-// 9.4). Deliberately not linked to Invoice yet — the matching relation is
-// introduced alongside the matching logic itself, not speculatively here.
+// 9.4).
 model Vendor {
   id        Int      @id @default(autoincrement())
   name      String   @unique
   email     String?
   createdAt DateTime @default(now())
 
+  invoices Invoice[]
+
   @@map("vendors")
 }
 
-// Purchase orders an extracted invoice can be reconciled against (Phase
-// 9.4), same reasoning as Vendor above re: no Invoice relation yet.
+// Purchase orders an extracted invoice can be reconciled against (Phase 9.4).
 model PurchaseOrder {
   id        Int      @id @default(autoincrement())
   poNumber  String   @unique
   amount    Decimal  @db.Decimal(12, 2)
   createdAt DateTime @default(now())
+
+  invoices Invoice[]
 
   @@map("purchase_orders")
 }

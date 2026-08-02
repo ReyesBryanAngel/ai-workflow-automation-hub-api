@@ -1,20 +1,40 @@
 import { Router } from 'express';
 import multer from 'multer';
 
-import { requireAuth } from '../middleware/auth.js';
+import { UserRole } from '../generated/prisma/enums.js';
+import { requireAuth, requireRole } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import {
   ALLOWED_INVOICE_MIME_TYPES,
+  invoiceIdParamsSchema,
+  listInvoicesQuerySchema,
   MAX_INVOICE_UPLOAD_BYTES,
+  rejectInvoiceBodySchema,
   uploadInvoiceBodySchema,
+  type ListInvoicesQuery,
+  type RejectInvoiceInput,
   type UploadInvoiceInput,
 } from '../schemas/invoices.schema.js';
-import { createInvoiceFromUpload } from '../services/invoice.service.js';
+import {
+  approveInvoice,
+  createInvoiceFromUpload,
+  exportInvoice,
+  listInvoices,
+  rejectInvoice,
+  schedulePaymentForInvoice,
+} from '../services/invoice.service.js';
 import { AppError } from '../utils/AppError.js';
 
 export const invoicesRouter = Router();
 
 invoicesRouter.use(requireAuth);
+
+// Doubles as the Phase 9.5 review queue via ?status=NEEDS_REVIEW.
+invoicesRouter.get('/', validate(listInvoicesQuerySchema, 'query'), async (req, res) => {
+  const { status } = req.query as unknown as ListInvoicesQuery;
+  const invoices = await listInvoices(status);
+  res.json(invoices);
+});
 
 // Memory storage: files are handed straight to lib/storage.ts as a Buffer,
 // never touching local disk — same "no local temp files" posture the S3
@@ -59,5 +79,64 @@ invoicesRouter.post(
     });
 
     res.status(201).json(invoice);
+  },
+);
+
+const APPROVER_ROLES = [UserRole.APPROVER, UserRole.ADMIN];
+
+invoicesRouter.post(
+  '/:id/approve',
+  requireRole(...APPROVER_ROLES),
+  validate(invoiceIdParamsSchema, 'params'),
+  async (req, res) => {
+    const { id } = req.params as unknown as { id: number };
+
+    const invoice = await approveInvoice(id, req.user!.sub);
+
+    res.json(invoice);
+  },
+);
+
+invoicesRouter.post(
+  '/:id/reject',
+  requireRole(...APPROVER_ROLES),
+  validate(invoiceIdParamsSchema, 'params'),
+  validate(rejectInvoiceBodySchema),
+  async (req, res) => {
+    const { id } = req.params as unknown as { id: number };
+    const { reason } = req.body as RejectInvoiceInput;
+
+    const invoice = await rejectInvoice(id, req.user!.sub, reason);
+
+    res.json(invoice);
+  },
+);
+
+// Mock accounting-system export (TASKS.md 9.6), same pattern as the mock CRM
+// integration (crm.routes.ts:34-42): no real third-party call, just the
+// status transition. Any authenticated user may trigger it, same as the CRM
+// mock endpoint — export isn't a review decision like approve/reject, so it
+// isn't APPROVER/ADMIN-gated.
+invoicesRouter.post('/:id/export', validate(invoiceIdParamsSchema, 'params'), async (req, res) => {
+  const { id } = req.params as unknown as { id: number };
+
+  const invoice = await exportInvoice(id);
+
+  res.json(invoice);
+});
+
+// Called by the n8n cron-triggered payment-scheduling workflow (TASKS.md
+// 9.6), one invoice at a time, once n8n has queried EXPORTED invoices with an
+// approaching dueDate — this endpoint doesn't re-check dueDate itself, n8n
+// owns that query.
+invoicesRouter.post(
+  '/:id/schedule-payment',
+  validate(invoiceIdParamsSchema, 'params'),
+  async (req, res) => {
+    const { id } = req.params as unknown as { id: number };
+
+    const invoice = await schedulePaymentForInvoice(id);
+
+    res.json(invoice);
   },
 );

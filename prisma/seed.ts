@@ -1,5 +1,5 @@
 import { env } from '../src/config/env.js';
-import { EmailCategory } from '../src/generated/prisma/enums.js';
+import { EmailCategory, UserRole } from '../src/generated/prisma/enums.js';
 import { hashPassword } from '../src/lib/password.js';
 import { prisma } from '../src/lib/prisma.js';
 import { DEFAULT_EMAIL_ANALYSIS_SYSTEM_PROMPT } from '../src/prompts/emailAnalysis.prompt.js';
@@ -58,8 +58,8 @@ async function main() {
 
   const admin = await prisma.user.upsert({
     where: { email: env.adminEmail },
-    update: { passwordHash },
-    create: { email: env.adminEmail, passwordHash },
+    update: { passwordHash, role: UserRole.ADMIN },
+    create: { email: env.adminEmail, passwordHash, role: UserRole.ADMIN },
   });
 
   console.log(`Seeded admin user: ${admin.email}`);

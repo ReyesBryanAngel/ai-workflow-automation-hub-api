@@ -1,8 +1,14 @@
 import { env } from '../config/env.js';
-import { Prisma, type Invoice, type PurchaseOrder, type Vendor } from '../generated/prisma/client.js';
+import {
+  Prisma,
+  type Invoice,
+  type PurchaseOrder,
+  type Vendor,
+} from '../generated/prisma/client.js';
 import { InvoiceStatus, WorkflowStatus } from '../generated/prisma/enums.js';
 import { logger } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
+import { sendSlackNotification } from '../lib/slack.js';
 import { logWorkflowEvent } from './invoice.service.js';
 
 // Below this Dice's-coefficient similarity, an extracted vendor name is not
@@ -175,9 +181,7 @@ function evaluateRiskExceptions(params: {
     exceptions.push(`PO number "${invoice.poNumber}" not found`);
   } else if (invoice.total !== null) {
     const difference = invoice.total.minus(purchaseOrder.amount).abs();
-    const tolerance = purchaseOrder.amount
-      .times(env.invoicePoTolerancePercent)
-      .toDecimalPlaces(2);
+    const tolerance = purchaseOrder.amount.times(env.invoicePoTolerancePercent).toDecimalPlaces(2);
     if (difference.greaterThan(tolerance)) {
       exceptions.push(
         `Invoice total ${invoice.total.toFixed(2)} does not match PO ${purchaseOrder.poNumber} amount ${purchaseOrder.amount.toFixed(2)} (tolerance ${(env.invoicePoTolerancePercent * 100).toFixed(0)}%)`,
@@ -185,7 +189,10 @@ function evaluateRiskExceptions(params: {
     }
   }
 
-  if (invoice.total !== null && invoice.total.greaterThanOrEqualTo(env.invoiceRiskAmountThreshold)) {
+  if (
+    invoice.total !== null &&
+    invoice.total.greaterThanOrEqualTo(env.invoiceRiskAmountThreshold)
+  ) {
     exceptions.push(
       `Invoice total ${invoice.total.toFixed(2)} is at or above the review threshold ${new Prisma.Decimal(env.invoiceRiskAmountThreshold).toFixed(2)}`,
     );
@@ -209,7 +216,10 @@ async function runRiskEvaluation(params: {
     error: exceptions.length > 0 ? exceptions.join('; ') : undefined,
   });
 
-  return prisma.invoice.update({
+  const entersReview =
+    exceptions.length > 0 && params.invoice.status !== InvoiceStatus.NEEDS_REVIEW;
+
+  const updated = await prisma.invoice.update({
     where: { id: params.invoice.id },
     data: {
       vendorId: params.vendorMatch?.vendor.id ?? null,
@@ -218,6 +228,28 @@ async function runRiskEvaluation(params: {
       status: exceptions.length > 0 ? InvoiceStatus.NEEDS_REVIEW : params.invoice.status,
     },
   });
+
+  if (entersReview) {
+    await notifyInvoiceNeedsReview(updated, exceptions);
+  }
+
+  return updated;
+}
+
+// Fail-soft like every other optional external call in this codebase
+// (lib/slack.ts itself no-ops without a configured webhook) — a Slack outage
+// must never block the invoice from landing at NEEDS_REVIEW.
+async function notifyInvoiceNeedsReview(invoice: Invoice, exceptions: string[]): Promise<void> {
+  try {
+    await sendSlackNotification(
+      `:warning: Invoice #${invoice.id}${invoice.vendor ? ` (${invoice.vendor})` : ''} needs review: ${exceptions.join('; ')}`,
+    );
+  } catch (error) {
+    logger.warn(
+      { err: error, invoiceId: invoice.id },
+      'Failed to send Slack notification for invoice entering NEEDS_REVIEW',
+    );
+  }
 }
 
 // Orchestrates the full 9.4 pipeline for a single invoice, run right after

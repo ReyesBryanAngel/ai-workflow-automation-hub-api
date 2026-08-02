@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { InvoiceSourceType } from '../generated/prisma/enums.js';
+import { InvoiceSourceType, InvoiceStatus } from '../generated/prisma/enums.js';
 
 // Claude's native PDF input (Phase 9.3) and the LlamaParse OCR fallback both
 // only make sense for these — anything else is rejected at intake rather
@@ -25,3 +25,24 @@ export const uploadInvoiceBodySchema = z.object({
 });
 
 export type UploadInvoiceInput = z.infer<typeof uploadInvoiceBodySchema>;
+
+export const invoiceIdParamsSchema = z.object({
+  id: z.coerce.number().int().positive(),
+});
+
+// GET /api/invoices?status=NEEDS_REVIEW (Phase 9.5 review queue); status is
+// optional so the same route also serves an unfiltered list.
+export const listInvoicesQuerySchema = z.object({
+  status: z.enum(InvoiceStatus).optional(),
+});
+
+export type ListInvoicesQuery = z.infer<typeof listInvoicesQuerySchema>;
+
+// Approval needs no body — the actor and outcome are fully determined by
+// who's calling and which endpoint they hit. Rejection always needs a reason
+// so the review queue (and whoever reads it later) knows why.
+export const rejectInvoiceBodySchema = z.object({
+  reason: z.string().min(1, 'A rejection reason is required'),
+});
+
+export type RejectInvoiceInput = z.infer<typeof rejectInvoiceBodySchema>;

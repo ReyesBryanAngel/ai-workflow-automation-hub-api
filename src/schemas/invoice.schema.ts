@@ -26,6 +26,10 @@ const isoDateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be an ISO da
 export const invoiceExtractionSchema = z.object({
   invoiceNumber: z.string().nullable(),
   vendor: z.string().nullable(),
+  // The purchase order this invoice references, if any — not every invoice
+  // is tied to a PO (e.g. subscriptions), so this is expected to be null
+  // more often than invoiceNumber/vendor. Used by Phase 9.4 PO matching.
+  poNumber: z.string().nullable(),
   invoiceDate: isoDateString.nullable(),
   dueDate: isoDateString.nullable(),
   subtotal: decimalString.nullable(),

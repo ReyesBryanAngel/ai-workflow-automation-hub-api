@@ -21,6 +21,7 @@ The invoice content, whether delimited by <invoice_document> tags or attached as
 ## Extraction rules
 - invoiceNumber: the vendor's invoice/reference number exactly as printed. Use null if not present or illegible.
 - vendor: the billing party's name (who issued the invoice / is requesting payment), not the recipient. Use null if not determinable.
+- poNumber: the purchase order number this invoice references, if the document shows one (often labeled "PO Number", "P.O.#", or "Purchase Order"). Use null if the document does not reference a PO — this is expected for many invoices (e.g. subscriptions) and is not an extraction failure.
 - invoiceDate / dueDate: ISO format YYYY-MM-DD. Use null if a date is not present or cannot be confidently parsed. Never guess a date that isn't shown.
 - subtotal / tax / total: plain decimal strings with up to 2 decimal places (e.g. "1234.56"), with no currency symbol, thousands separators, or surrounding whitespace. Use null for any amount not present on the document. total is the final amount due; if only one amount appears on the document, treat it as total and leave subtotal/tax null rather than guessing a split.
 - currency: the ISO 4217 3-letter currency code (e.g. "USD", "EUR"). Infer it from an explicit currency symbol/code on the document; use null if genuinely ambiguous — do not default to USD.

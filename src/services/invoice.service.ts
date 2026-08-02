@@ -29,6 +29,7 @@ import {
   type InvoiceExtraction,
 } from '../schemas/invoice.schema.js';
 import { AppError } from '../utils/AppError.js';
+import { runInvoiceChecks } from './invoiceChecks.service.js';
 
 const REQUEST_OPTIONS = {
   timeout: ANTHROPIC_REQUEST_TIMEOUT_MS,
@@ -70,22 +71,24 @@ export async function createInvoiceFromUpload(params: {
     },
   });
 
-  // Post-upload hook (Phase 9.3): extraction runs automatically right after
-  // the file lands, so intake never depends on a human or an n8n workflow
-  // (not built yet for invoices — see Phase 9.7) to kick it off. Extraction
-  // failures are already logged to workflow_logs inside extractInvoice()
-  // (both attempted paths); a failure here must not fail the upload
-  // response, since the file is safely stored and the row exists — it just
-  // stays PENDING with fields unfilled, same as if extraction hadn't run
-  // yet, ready for a future manual/n8n retry.
+  // Post-upload hook (Phase 9.3/9.4): extraction, then the duplicate/vendor/
+  // PO/risk checks pipeline, both run automatically right after the file
+  // lands, so intake never depends on a human or an n8n workflow (not built
+  // yet for invoices — see Phase 9.7) to kick it off. Failures at either
+  // step are already logged to workflow_logs inside extractInvoice() and
+  // runInvoiceChecks(); a failure here must not fail the upload response,
+  // since the file is safely stored and the row exists — it just stays at
+  // whatever status the last successful step left it in, ready for a future
+  // manual/n8n retry.
   try {
-    return await extractInvoice(invoice.id);
+    const extracted = await extractInvoice(invoice.id);
+    return await runInvoiceChecks(extracted.id);
   } catch (error) {
     logger.warn(
       { err: error, invoiceId: invoice.id },
-      'Invoice extraction failed after upload; invoice remains PENDING with fields unfilled',
+      'Invoice extraction/checks failed after upload; invoice remains at its last successful status',
     );
-    return invoice;
+    return prisma.invoice.findUniqueOrThrow({ where: { id: invoice.id } });
   }
 }
 
@@ -114,7 +117,7 @@ function inferMimeType(storageKey: string): string {
   return mimeType;
 }
 
-async function logWorkflowEvent(params: {
+export async function logWorkflowEvent(params: {
   workflow: string;
   status: WorkflowStatus;
   executionTime?: number;
@@ -172,6 +175,7 @@ function toInvoiceUpdateData(extraction: InvoiceExtraction): Prisma.InvoiceUpdat
   return {
     invoiceNumber: extraction.invoiceNumber,
     vendor: extraction.vendor,
+    poNumber: extraction.poNumber,
     invoiceDate: extraction.invoiceDate ? new Date(extraction.invoiceDate) : null,
     dueDate: extraction.dueDate ? new Date(extraction.dueDate) : null,
     subtotal: extraction.subtotal !== null ? new Prisma.Decimal(extraction.subtotal) : null,

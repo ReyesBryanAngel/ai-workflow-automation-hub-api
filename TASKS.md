@@ -162,24 +162,24 @@ This breaks the project into 8 sequential phases mapped to a 3–4 day build, pl
 ---
 
 ### 9.3 — OCR & Field Extraction
-- [ ] `schemas/invoice.schema.ts` — Zod schema matching the draft `InvoiceSchema`, `Decimal`-safe on the wire
-- [ ] `prompts/invoiceExtraction.prompt.ts` — system prompt for structured extraction, same untrusted-content framing pattern as `emailAnalysis.prompt.ts` (the invoice file is attacker-controllable input, same as an email body)
-- [ ] `lib/llamaparse.ts` — LlamaParse client; primary extraction path performs OCR/text extraction and returns structured markdown/text for downstream processing
-- [ ] `services/invoice.service.ts`: `extractInvoice()` — primary path sends the LlamaParse output to Claude using the same `anthropic.messages.parse` + `zodOutputFormat` + `withWorkflowLogging` pattern as `ai.service.ts`
-- [ ] Fallback path: if LlamaParse fails, returns incomplete required fields, or extraction confidence is low, send the original PDF directly to Claude as a document input block and perform the same structured extraction
-- [ ] Log which extraction path was used (`llamaparse` vs `claude_pdf_fallback`) on the `WorkflowLog` row — needed later to evaluate whether LlamaParse is providing measurable value
-- [ ] Wire into intake: extraction runs automatically after a file is stored (n8n step or a post-upload hook)
+- [x] `schemas/invoice.schema.ts` — Zod schema matching the draft `InvoiceSchema`, `Decimal`-safe on the wire
+- [x] `prompts/invoiceExtraction.prompt.ts` — system prompt for structured extraction, same untrusted-content framing pattern as `emailAnalysis.prompt.ts` (the invoice file is attacker-controllable input, same as an email body)
+- [x] `lib/llamaparse.ts` — LlamaParse client; primary extraction path performs OCR/text extraction and returns structured markdown/text for downstream processing
+- [x] `services/invoice.service.ts`: `extractInvoice()` — primary path sends the LlamaParse output to Claude using the same `anthropic.messages.parse` + `zodOutputFormat` + `withWorkflowLogging` pattern as `ai.service.ts`
+- [x] Fallback path: if LlamaParse fails, returns incomplete required fields, or extraction confidence is low, send the original PDF directly to Claude as a document input block and perform the same structured extraction
+- [x] Log which extraction path was used (`llamaparse` vs `claude_pdf_fallback`) on the `WorkflowLog` row — needed later to evaluate whether LlamaParse is providing measurable value
+- [x] Wire into intake: extraction runs automatically after a file is stored (n8n step or a post-upload hook)
 
 **Done when:** a sample invoice PDF reliably produces a filled `Invoice` row through the LlamaParse → Claude pipeline, and intentionally forcing a LlamaParse failure or low-confidence extraction automatically falls back to the Claude PDF document path and still produces a filled row.
 
 ---
 
 ### 9.4 — Duplicate Check, Vendor/PO Matching, Risk Checks
-- [ ] Duplicate check: unique constraint / lookup on `(vendor, invoiceNumber)` before/after extraction; mark `status: DUPLICATE` and short-circuit the rest of the pipeline
-- [ ] Vendor matching: fuzzy match extracted vendor name against `Vendor` table; auto-link on confident match, flag `NEEDS_REVIEW` with no match, never silently create a new vendor from unverified extraction
-- [ ] PO matching: look up `PurchaseOrder` by extracted PO number (if present); compare invoice total against PO amount within a tolerance
-- [ ] Risk/exception rules (plain rule-based, not another Claude call): missing PO, amount mismatch beyond tolerance, new/unverified vendor, total above a configurable threshold — collect into an `exceptions: string[]` field, set `status: NEEDS_REVIEW` if any fire
-- [ ] Log each check's outcome to `workflow_logs` the same way AI steps do
+- [x] Duplicate check: unique constraint / lookup on `(vendor, invoiceNumber)` before/after extraction; mark `status: DUPLICATE` and short-circuit the rest of the pipeline
+- [x] Vendor matching: fuzzy match extracted vendor name against `Vendor` table; auto-link on confident match, flag `NEEDS_REVIEW` with no match, never silently create a new vendor from unverified extraction
+- [x] PO matching: look up `PurchaseOrder` by extracted PO number (if present); compare invoice total against PO amount within a tolerance
+- [x] Risk/exception rules (plain rule-based, not another Claude call): missing PO, amount mismatch beyond tolerance, new/unverified vendor, total above a configurable threshold — collect into an `exceptions: string[]` field, set `status: NEEDS_REVIEW` if any fire
+- [x] Log each check's outcome to `workflow_logs` the same way AI steps do
 
 **Done when:** a duplicate invoice is caught before reaching approval, a mismatched-PO invoice is flagged with a specific reason, and a clean invoice with a matched PO and vendor sails through with no exceptions.
 

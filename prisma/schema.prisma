@@ -58,11 +58,23 @@ enum InvoiceSourceType {
   API
 }
 
+// Phase 9.5: minimal authorization level on top of the existing JWT-only
+// auth. Only APPROVER/ADMIN may approve or reject an invoice; MEMBER is the
+// default for anyone else (e.g. the seeded admin is promoted explicitly).
+enum UserRole {
+  ADMIN
+  APPROVER
+  MEMBER
+}
+
 model User {
   id           Int      @id @default(autoincrement())
   email        String   @unique
   passwordHash String
+  role         UserRole @default(MEMBER)
   createdAt    DateTime @default(now())
+
+  reviewedInvoices Invoice[] @relation("InvoiceReviewedBy")
 
   @@map("users")
 }
@@ -163,6 +175,17 @@ model Invoice {
   storageKey  String
   documentUrl String?
   sourceType  InvoiceSourceType
+
+  // Phase 9.5 human approval. rejectionReason is required by the reject
+  // endpoint (never set on approval); reviewedBy/reviewedAt record which
+  // APPROVER/ADMIN user acted and when, cleared back to null if the same
+  // invoice is later re-reviewed (it can't be, today's checks pipeline never
+  // re-runs on a PENDING/NEEDS_REVIEW-only transition, but the fields stay
+  // nullable rather than write-once).
+  rejectionReason String?
+  reviewedBy      User?     @relation("InvoiceReviewedBy", fields: [reviewedById], references: [id])
+  reviewedById    Int?
+  reviewedAt      DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

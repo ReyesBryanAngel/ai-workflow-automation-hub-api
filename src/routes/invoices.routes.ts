@@ -1,24 +1,29 @@
 import { Router } from 'express';
 import multer from 'multer';
 
+import { UserRole } from '../generated/prisma/enums.js';
 import { prisma } from '../lib/prisma.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, requireRole } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import {
   ALLOWED_INVOICE_MIME_TYPES,
   invoiceIdParamsSchema,
   listInvoicesQuerySchema,
   MAX_INVOICE_UPLOAD_BYTES,
+  rejectInvoiceBodySchema,
   updateInvoiceBodySchema,
   uploadInvoiceBodySchema,
   type ListInvoicesQuery,
+  type RejectInvoiceInput,
   type UpdateInvoiceInput,
   type UploadInvoiceInput,
 } from '../schemas/invoices.schema.js';
 import {
+  approveInvoice,
   createInvoiceFromUpload,
   exportInvoice,
   listInvoices,
+  rejectInvoice,
   schedulePaymentForInvoice,
   updateInvoice,
 } from '../services/invoice.service.js';
@@ -35,15 +40,20 @@ invoicesRouter.get('/', validate(listInvoicesQuerySchema, 'query'), async (req, 
   res.json(invoices);
 });
 
-// Includes the matched vendor/PO (Phase 9.4) so a single call surfaces
-// everything the checks pipeline decided about this invoice, not just its
-// own columns.
+// Includes the matched vendor/PO (Phase 9.4) and reviewer (Phase 9.5) so a
+// single call surfaces everything the pipeline decided about this invoice,
+// not just its own columns.
 invoicesRouter.get('/:id', validate(invoiceIdParamsSchema, 'params'), async (req, res) => {
   const { id } = req.params as unknown as { id: number };
 
   const invoice = await prisma.invoice.findUnique({
     where: { id },
-    include: { matchedVendor: true, purchaseOrder: true },
+    include: {
+      matchedVendor: true,
+      purchaseOrder: true,
+      // select only, never the full User relation — it carries passwordHash.
+      reviewedBy: { select: { id: true, email: true, role: true } },
+    },
   });
 
   if (!invoice) {
@@ -56,7 +66,10 @@ invoicesRouter.get('/:id', validate(invoiceIdParamsSchema, 'params'), async (req
 // Manual correction of extracted fields (e.g. fixing a bad OCR read before
 // approval) — only from a pre-decision status (see EDITABLE_STATUSES in
 // invoice.service.ts); re-runs the 9.4 checks pipeline afterward so the
-// correction can actually change the invoice's status/exceptions.
+// correction can actually change the invoice's status/exceptions. Not
+// role-gated: same reasoning as /:id/export below, this isn't an approval
+// decision, just a data-quality fix any authenticated user can make before
+// an APPROVER ever looks at it.
 invoicesRouter.patch(
   '/:id',
   validate(invoiceIdParamsSchema, 'params'),
@@ -117,11 +130,41 @@ invoicesRouter.post(
   },
 );
 
+const APPROVER_ROLES = [UserRole.APPROVER, UserRole.ADMIN];
+
+invoicesRouter.post(
+  '/:id/approve',
+  requireRole(...APPROVER_ROLES),
+  validate(invoiceIdParamsSchema, 'params'),
+  async (req, res) => {
+    const { id } = req.params as unknown as { id: number };
+
+    const invoice = await approveInvoice(id, req.user!.sub);
+
+    res.json(invoice);
+  },
+);
+
+invoicesRouter.post(
+  '/:id/reject',
+  requireRole(...APPROVER_ROLES),
+  validate(invoiceIdParamsSchema, 'params'),
+  validate(rejectInvoiceBodySchema),
+  async (req, res) => {
+    const { id } = req.params as unknown as { id: number };
+    const { reason } = req.body as RejectInvoiceInput;
+
+    const invoice = await rejectInvoice(id, req.user!.sub, reason);
+
+    res.json(invoice);
+  },
+);
+
 // Mock accounting-system export (TASKS.md 9.6), same pattern as the mock CRM
 // integration (crm.routes.ts:34-42): no real third-party call, just the
-// status transition. Only an APPROVED invoice can be exported — see
-// exportInvoice's own guard in invoice.service.ts; approval itself (Phase
-// 9.5) is scoped to a separate branch, not this one.
+// status transition. Any authenticated user may trigger it, same as the CRM
+// mock endpoint — export isn't a review decision like approve/reject, so it
+// isn't APPROVER/ADMIN-gated.
 invoicesRouter.post('/:id/export', validate(invoiceIdParamsSchema, 'params'), async (req, res) => {
   const { id } = req.params as unknown as { id: number };
 

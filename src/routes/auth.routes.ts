@@ -20,7 +20,7 @@ authRouter.post('/login', authLimiter, validate(loginSchema), async (req, res) =
     throw new AppError('Invalid email or password', 401);
   }
 
-  const token = signToken({ sub: user.id, email: user.email });
+  const token = signToken({ sub: user.id, email: user.email, role: user.role });
 
-  res.json({ token, user: { id: user.id, email: user.email } });
+  res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
 });

@@ -31,19 +31,28 @@ export const invoiceIdParamsSchema = z.object({
   id: z.coerce.number().int().positive(),
 });
 
-// GET /api/invoices?status=NEEDS_REVIEW (review queue); status is optional
-// so the same route also serves an unfiltered list.
+// GET /api/invoices?status=NEEDS_REVIEW (Phase 9.5 review queue); status is
+// optional so the same route also serves an unfiltered list.
 export const listInvoicesQuerySchema = z.object({
   status: z.enum(InvoiceStatus).optional(),
 });
 
 export type ListInvoicesQuery = z.infer<typeof listInvoicesQuerySchema>;
 
+// Approval needs no body — the actor and outcome are fully determined by
+// who's calling and which endpoint they hit. Rejection always needs a reason
+// so the review queue (and whoever reads it later) knows why.
+export const rejectInvoiceBodySchema = z.object({
+  reason: z.string().min(1, 'A rejection reason is required'),
+});
+
+export type RejectInvoiceInput = z.infer<typeof rejectInvoiceBodySchema>;
+
 // Manual correction of the extracted/business fields (e.g. a human fixing a
 // bad OCR read before approval) — deliberately excludes status, vendorId/
-// purchaseOrderId, and exceptions, all of which are only ever set by the
-// pipeline itself (extraction, checks), never hand-edited. Each field is
-// optional (omit = leave untouched) but nullable
+// purchaseOrderId, exceptions, and the approval trail, all of which are only
+// ever set by the pipeline itself (extraction, checks, approve/reject), never
+// hand-edited. Each field is optional (omit = leave untouched) but nullable
 // where the extraction schema allows null (clear a previously-set value) —
 // same convention as invoiceExtractionSchema. At least one field is required
 // so this can't be called as a silent no-op.

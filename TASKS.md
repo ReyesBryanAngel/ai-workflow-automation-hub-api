@@ -186,19 +186,19 @@ This breaks the project into 8 sequential phases mapped to a 3–4 day build, pl
 ---
 
 ### 9.5 — Human Approval
-- [ ] Add a minimal `role` field to `User` (e.g. `ADMIN` / `APPROVER` / `MEMBER`) — today `requireAuth` only checks "has a valid JWT," there's no concept of authorization level anywhere in the app
-- [ ] `POST /api/invoices/:id/approve`, `POST /api/invoices/:id/reject` — role-gated (APPROVER/ADMIN only), rejection requires a reason
-- [ ] `GET /api/invoices?status=NEEDS_REVIEW` — review queue endpoint (a minimal API-level version of the "Manual Review Queue" stretch goal already listed below; a dedicated UI for it can stay a stretch item)
-- [ ] Slack notification when an invoice enters `NEEDS_REVIEW`, reusing `lib/slack.ts`
+- [x] Add a minimal `role` field to `User` (e.g. `ADMIN` / `APPROVER` / `MEMBER`) — today `requireAuth` only checks "has a valid JWT," there's no concept of authorization level anywhere in the app
+- [x] `POST /api/invoices/:id/approve`, `POST /api/invoices/:id/reject` — role-gated (APPROVER/ADMIN only), rejection requires a reason
+- [x] `GET /api/invoices?status=NEEDS_REVIEW` — review queue endpoint (a minimal API-level version of the "Manual Review Queue" stretch goal already listed below; a dedicated UI for it can stay a stretch item)
+- [x] Slack notification when an invoice enters `NEEDS_REVIEW`, reusing `lib/slack.ts`
 
 **Done when:** an invoice flagged with an exception blocks at `NEEDS_REVIEW` until an APPROVER-role user explicitly approves or rejects it via the API — it never silently proceeds to export.
 
 ---
 
 ### 9.6 — Export & Payment Scheduling
-- [ ] `POST /api/invoices/:id/export` — mock accounting-system export, same pattern as the existing mock CRM integration (`crm.routes.ts:34-42`); sets `status: EXPORTED`
-- [ ] n8n cron-triggered workflow: on schedule, query `EXPORTED` invoices with an approaching `dueDate`, call a `POST /api/invoices/:id/schedule-payment` endpoint, then set `status: PAID` → `ARCHIVED`
-- [ ] Error branches on both the export call and the cron-triggered payment step, logged to `workflow_logs` like every other stage
+- [x] `POST /api/invoices/:id/export` — mock accounting-system export, same pattern as the existing mock CRM integration (`crm.routes.ts:34-42`); sets `status: EXPORTED`
+- [ ] n8n cron-triggered workflow: on schedule, query `EXPORTED` invoices with an approaching `dueDate`, call a `POST /api/invoices/:id/schedule-payment` endpoint, then set `status: PAID` → `ARCHIVED` — endpoint is implemented and ready; the n8n workflow itself is not yet built
+- [x] Error branches on both the export call and the cron-triggered payment step, logged to `workflow_logs` like every other stage
 
 **Done when:** an approved invoice reaches `EXPORTED` via the API, and the n8n cron job picks it up on its own schedule and moves it to `PAID`/`ARCHIVED` without manual triggering.
 

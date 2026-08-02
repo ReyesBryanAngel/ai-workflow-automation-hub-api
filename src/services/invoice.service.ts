@@ -350,11 +350,76 @@ export async function listInvoices(status?: InvoiceStatus): Promise<Invoice[]> {
   });
 }
 
+// Approve/reject are only valid from the two pre-decision statuses: a clean
+// invoice sitting at PENDING (no exceptions fired) or one flagged
+// NEEDS_REVIEW. Anything else (DUPLICATE, already APPROVED/REJECTED,
+// EXPORTED, PAID, ARCHIVED) is a terminal or out-of-band state that approval
+// must not silently overwrite.
+const REVIEWABLE_STATUSES: InvoiceStatus[] = [InvoiceStatus.PENDING, InvoiceStatus.NEEDS_REVIEW];
+
+async function getReviewableInvoice(invoiceId: number): Promise<Invoice> {
+  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
+  if (!invoice) {
+    throw new AppError('Invoice not found', 404);
+  }
+  if (!REVIEWABLE_STATUSES.includes(invoice.status)) {
+    throw new AppError(
+      `Invoice #${invoice.id} cannot be approved or rejected from status ${invoice.status}`,
+      409,
+    );
+  }
+  return invoice;
+}
+
+export async function approveInvoice(invoiceId: number, reviewerId: number): Promise<Invoice> {
+  const invoice = await getReviewableInvoice(invoiceId);
+
+  const updated = await prisma.invoice.update({
+    where: { id: invoice.id },
+    data: {
+      status: InvoiceStatus.APPROVED,
+      reviewedById: reviewerId,
+      reviewedAt: new Date(),
+      rejectionReason: null,
+    },
+  });
+
+  await logWorkflowEvent({ workflow: 'invoice_approve', status: WorkflowStatus.SUCCESS });
+
+  return updated;
+}
+
+export async function rejectInvoice(
+  invoiceId: number,
+  reviewerId: number,
+  reason: string,
+): Promise<Invoice> {
+  const invoice = await getReviewableInvoice(invoiceId);
+
+  const updated = await prisma.invoice.update({
+    where: { id: invoice.id },
+    data: {
+      status: InvoiceStatus.REJECTED,
+      reviewedById: reviewerId,
+      reviewedAt: new Date(),
+      rejectionReason: reason,
+    },
+  });
+
+  await logWorkflowEvent({
+    workflow: 'invoice_reject',
+    status: WorkflowStatus.SUCCESS,
+    error: reason,
+  });
+
+  return updated;
+}
+
 // Statuses a human correction is allowed from — anything past a decision
-// (APPROVED/REJECTED/EXPORTED/PAID/ARCHIVED) is locked; approval itself
-// (Phase 9.5) is scoped to a separate branch, not this one. DUPLICATE is
-// included deliberately: it's the main case a correction needs to unstick (a
-// false-positive dup flag caused by a bad OCR read on invoiceNumber/vendor).
+// (APPROVED/REJECTED/EXPORTED/PAID/ARCHIVED) is locked, same rationale as
+// REVIEWABLE_STATUSES above. DUPLICATE is included deliberately: it's the
+// main case a correction needs to unstick (a false-positive dup flag caused
+// by a bad OCR read on invoiceNumber/vendor).
 const EDITABLE_STATUSES: InvoiceStatus[] = [
   InvoiceStatus.PENDING,
   InvoiceStatus.NEEDS_REVIEW,
@@ -423,10 +488,9 @@ async function getInvoiceOrThrow(invoiceId: number): Promise<Invoice> {
 // Mock accounting-system export (TASKS.md 9.6) — persists the status
 // transition directly instead of calling a real third-party API, same "mock
 // integration" pattern as the CRM record endpoint (crm.routes.ts:34-42). Only
-// an APPROVED invoice can be exported (approval itself is Phase 9.5, scoped
-// to a separate branch); every failure path here (invalid state, DB error) is
-// logged to workflow_logs per 9.6's explicit "error branches ... logged like
-// every other stage" requirement.
+// an APPROVED invoice can be exported; unlike approve/reject, every failure
+// path here (invalid state, DB error) is logged to workflow_logs per 9.6's
+// explicit "error branches ... logged like every other stage" requirement.
 export async function exportInvoice(invoiceId: number): Promise<Invoice> {
   try {
     const invoice = await getInvoiceOrThrow(invoiceId);

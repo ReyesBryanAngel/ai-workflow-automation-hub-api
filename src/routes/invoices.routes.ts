@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 
 import { UserRole } from '../generated/prisma/enums.js';
+import { prisma } from '../lib/prisma.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { validate } from '../middleware/validate.js';
 import {
@@ -10,9 +11,11 @@ import {
   listInvoicesQuerySchema,
   MAX_INVOICE_UPLOAD_BYTES,
   rejectInvoiceBodySchema,
+  updateInvoiceBodySchema,
   uploadInvoiceBodySchema,
   type ListInvoicesQuery,
   type RejectInvoiceInput,
+  type UpdateInvoiceInput,
   type UploadInvoiceInput,
 } from '../schemas/invoices.schema.js';
 import {
@@ -22,6 +25,7 @@ import {
   listInvoices,
   rejectInvoice,
   schedulePaymentForInvoice,
+  updateInvoice,
 } from '../services/invoice.service.js';
 import { AppError } from '../utils/AppError.js';
 
@@ -35,6 +39,50 @@ invoicesRouter.get('/', validate(listInvoicesQuerySchema, 'query'), async (req, 
   const invoices = await listInvoices(status);
   res.json(invoices);
 });
+
+// Includes the matched vendor/PO (Phase 9.4) and reviewer (Phase 9.5) so a
+// single call surfaces everything the pipeline decided about this invoice,
+// not just its own columns.
+invoicesRouter.get('/:id', validate(invoiceIdParamsSchema, 'params'), async (req, res) => {
+  const { id } = req.params as unknown as { id: number };
+
+  const invoice = await prisma.invoice.findUnique({
+    where: { id },
+    include: {
+      matchedVendor: true,
+      purchaseOrder: true,
+      // select only, never the full User relation — it carries passwordHash.
+      reviewedBy: { select: { id: true, email: true, role: true } },
+    },
+  });
+
+  if (!invoice) {
+    throw new AppError('Invoice not found', 404);
+  }
+
+  res.json(invoice);
+});
+
+// Manual correction of extracted fields (e.g. fixing a bad OCR read before
+// approval) — only from a pre-decision status (see EDITABLE_STATUSES in
+// invoice.service.ts); re-runs the 9.4 checks pipeline afterward so the
+// correction can actually change the invoice's status/exceptions. Not
+// role-gated: same reasoning as /:id/export below, this isn't an approval
+// decision, just a data-quality fix any authenticated user can make before
+// an APPROVER ever looks at it.
+invoicesRouter.patch(
+  '/:id',
+  validate(invoiceIdParamsSchema, 'params'),
+  validate(updateInvoiceBodySchema),
+  async (req, res) => {
+    const { id } = req.params as unknown as { id: number };
+    const patch = req.body as UpdateInvoiceInput;
+
+    const invoice = await updateInvoice(id, patch);
+
+    res.json(invoice);
+  },
+);
 
 // Memory storage: files are handed straight to lib/storage.ts as a Buffer,
 // never touching local disk — same "no local temp files" posture the S3

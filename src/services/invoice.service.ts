@@ -28,6 +28,7 @@ import {
   isInvoiceExtractionIncomplete,
   type InvoiceExtraction,
 } from '../schemas/invoice.schema.js';
+import type { UpdateInvoiceInput } from '../schemas/invoices.schema.js';
 import { AppError } from '../utils/AppError.js';
 import { runInvoiceChecks } from './invoiceChecks.service.js';
 
@@ -412,6 +413,68 @@ export async function rejectInvoice(
   });
 
   return updated;
+}
+
+// Statuses a human correction is allowed from — anything past a decision
+// (APPROVED/REJECTED/EXPORTED/PAID/ARCHIVED) is locked, same rationale as
+// REVIEWABLE_STATUSES above. DUPLICATE is included deliberately: it's the
+// main case a correction needs to unstick (a false-positive dup flag caused
+// by a bad OCR read on invoiceNumber/vendor).
+const EDITABLE_STATUSES: InvoiceStatus[] = [
+  InvoiceStatus.PENDING,
+  InvoiceStatus.NEEDS_REVIEW,
+  InvoiceStatus.DUPLICATE,
+];
+
+function toInvoiceEditData(patch: UpdateInvoiceInput): Prisma.InvoiceUpdateInput {
+  return {
+    ...(patch.invoiceNumber !== undefined && { invoiceNumber: patch.invoiceNumber }),
+    ...(patch.vendor !== undefined && { vendor: patch.vendor }),
+    ...(patch.poNumber !== undefined && { poNumber: patch.poNumber }),
+    ...(patch.invoiceDate !== undefined && {
+      invoiceDate: patch.invoiceDate ? new Date(patch.invoiceDate) : null,
+    }),
+    ...(patch.dueDate !== undefined && { dueDate: patch.dueDate ? new Date(patch.dueDate) : null }),
+    ...(patch.subtotal !== undefined && {
+      subtotal: patch.subtotal !== null ? new Prisma.Decimal(patch.subtotal) : null,
+    }),
+    ...(patch.tax !== undefined && {
+      tax: patch.tax !== null ? new Prisma.Decimal(patch.tax) : null,
+    }),
+    ...(patch.total !== undefined && {
+      total: patch.total !== null ? new Prisma.Decimal(patch.total) : null,
+    }),
+    ...(patch.currency !== undefined && { currency: patch.currency }),
+  };
+}
+
+// Manual correction path (e.g. a human catching a bad OCR read before
+// approval) — only the extracted/business fields are editable, never status,
+// vendor/PO links, exceptions, or the approval trail, all of which are
+// recomputed by the pipeline rather than hand-set. After applying the patch,
+// the full 9.4 checks pipeline is re-run so a correction can actually change
+// the outcome (a typo'd vendor now matches confidently, a corrected
+// invoiceNumber is no longer a duplicate, etc.) instead of just editing the
+// row and leaving a stale status/exceptions behind.
+export async function updateInvoice(
+  invoiceId: number,
+  patch: UpdateInvoiceInput,
+): Promise<Invoice> {
+  const invoice = await getInvoiceOrThrow(invoiceId);
+
+  if (!EDITABLE_STATUSES.includes(invoice.status)) {
+    throw new AppError(`Invoice #${invoice.id} cannot be edited from status ${invoice.status}`, 409);
+  }
+
+  await prisma.invoice.update({ where: { id: invoice.id }, data: toInvoiceEditData(patch) });
+
+  await logWorkflowEvent({
+    workflow: 'invoice_manual_update',
+    status: WorkflowStatus.SUCCESS,
+    error: `Updated fields: ${Object.keys(patch).join(', ')}`,
+  });
+
+  return runInvoiceChecks(invoice.id);
 }
 
 async function getInvoiceOrThrow(invoiceId: number): Promise<Invoice> {

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { InvoiceSourceType, InvoiceStatus } from '../generated/prisma/enums.js';
+import { decimalString, isoDateString } from './invoice.schema.js';
 
 // Claude's native PDF input (Phase 9.3) and the LlamaParse OCR fallback both
 // only make sense for these — anything else is rejected at intake rather
@@ -46,3 +47,30 @@ export const rejectInvoiceBodySchema = z.object({
 });
 
 export type RejectInvoiceInput = z.infer<typeof rejectInvoiceBodySchema>;
+
+// Manual correction of the extracted/business fields (e.g. a human fixing a
+// bad OCR read before approval) — deliberately excludes status, vendorId/
+// purchaseOrderId, exceptions, and the approval trail, all of which are only
+// ever set by the pipeline itself (extraction, checks, approve/reject), never
+// hand-edited. Each field is optional (omit = leave untouched) but nullable
+// where the extraction schema allows null (clear a previously-set value) —
+// same convention as invoiceExtractionSchema. At least one field is required
+// so this can't be called as a silent no-op.
+export const updateInvoiceBodySchema = z
+  .object({
+    invoiceNumber: z.string().min(1).nullable(),
+    vendor: z.string().min(1).nullable(),
+    poNumber: z.string().min(1).nullable(),
+    invoiceDate: isoDateString.nullable(),
+    dueDate: isoDateString.nullable(),
+    subtotal: decimalString.nullable(),
+    tax: decimalString.nullable(),
+    total: decimalString.nullable(),
+    currency: z.string().length(3),
+  })
+  .partial()
+  .refine((data) => Object.keys(data).length > 0, {
+    message: 'At least one field must be provided',
+  });
+
+export type UpdateInvoiceInput = z.infer<typeof updateInvoiceBodySchema>;

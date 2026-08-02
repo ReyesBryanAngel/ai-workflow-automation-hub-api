@@ -6,7 +6,10 @@ import { z } from 'zod';
 // @db.Decimal(12, 2)). Claude is instructed (see invoiceExtraction.prompt.ts)
 // to emit amounts in this exact format so `new Prisma.Decimal(value)` in
 // invoice.service.ts is a safe, lossless parse.
-const decimalString = z
+// Exported for reuse by schemas/invoices.schema.ts#updateInvoiceBodySchema —
+// a manual correction to an extracted field must satisfy the same wire
+// format Claude's extraction output does.
+export const decimalString = z
   .string()
   .regex(
     /^-?\d+(\.\d{1,2})?$/,
@@ -15,7 +18,9 @@ const decimalString = z
 
 // ISO calendar date (no time/timezone component) — invoiceDate/dueDate are
 // dates on the source document, not timestamps.
-const isoDateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be an ISO date (YYYY-MM-DD)');
+export const isoDateString = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Must be an ISO date (YYYY-MM-DD)');
 
 // Structured output contract for both extraction paths (LlamaParse text and
 // the Claude-PDF fallback) in invoice.service.ts#extractInvoice — matches

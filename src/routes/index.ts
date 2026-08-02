@@ -8,7 +8,9 @@ import { emailsRouter } from './emails.routes.js';
 import { invoicesRouter } from './invoices.routes.js';
 import { knowledgeRouter } from './knowledge.routes.js';
 import { notificationsRouter } from './notifications.routes.js';
+import { purchaseOrdersRouter } from './purchaseOrders.routes.js';
 import { reportsRouter } from './reports.routes.js';
+import { vendorsRouter } from './vendors.routes.js';
 import { workflowsRouter } from './workflows.routes.js';
 
 export const apiRouter = Router();
@@ -23,3 +25,5 @@ apiRouter.use('/notifications', notificationsRouter);
 apiRouter.use('/workflows', workflowsRouter);
 apiRouter.use('/dashboard', dashboardRouter);
 apiRouter.use('/reports', reportsRouter);
+apiRouter.use('/vendors', vendorsRouter);
+apiRouter.use('/purchase-orders', purchaseOrdersRouter);

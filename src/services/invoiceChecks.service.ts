@@ -215,7 +215,12 @@ async function runRiskEvaluation(params: {
       vendorId: params.vendorMatch?.vendor.id ?? null,
       purchaseOrderId: params.purchaseOrder?.id ?? null,
       exceptions,
-      status: exceptions.length > 0 ? InvoiceStatus.NEEDS_REVIEW : params.invoice.status,
+      // Reaching this point means the duplicate check already passed (it
+      // short-circuits before here), so PENDING is always the correct clean
+      // baseline — including when re-running checks after a manual
+      // correction on a previously DUPLICATE/NEEDS_REVIEW invoice, which
+      // must be able to clear back to PENDING rather than stay stuck.
+      status: exceptions.length > 0 ? InvoiceStatus.NEEDS_REVIEW : InvoiceStatus.PENDING,
     },
   });
 }

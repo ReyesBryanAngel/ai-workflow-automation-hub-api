@@ -28,6 +28,7 @@ import {
   isInvoiceExtractionIncomplete,
   type InvoiceExtraction,
 } from '../schemas/invoice.schema.js';
+import type { UpdateInvoiceInput } from '../schemas/invoices.schema.js';
 import { AppError } from '../utils/AppError.js';
 import { runInvoiceChecks } from './invoiceChecks.service.js';
 
@@ -340,4 +341,153 @@ export async function extractInvoice(invoiceId: number): Promise<Invoice> {
   });
 
   return updated;
+}
+
+export async function listInvoices(status?: InvoiceStatus): Promise<Invoice[]> {
+  return prisma.invoice.findMany({
+    where: status ? { status } : undefined,
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
+// Statuses a human correction is allowed from — anything past a decision
+// (APPROVED/REJECTED/EXPORTED/PAID/ARCHIVED) is locked; approval itself
+// (Phase 9.5) is scoped to a separate branch, not this one. DUPLICATE is
+// included deliberately: it's the main case a correction needs to unstick (a
+// false-positive dup flag caused by a bad OCR read on invoiceNumber/vendor).
+const EDITABLE_STATUSES: InvoiceStatus[] = [
+  InvoiceStatus.PENDING,
+  InvoiceStatus.NEEDS_REVIEW,
+  InvoiceStatus.DUPLICATE,
+];
+
+function toInvoiceEditData(patch: UpdateInvoiceInput): Prisma.InvoiceUpdateInput {
+  return {
+    ...(patch.invoiceNumber !== undefined && { invoiceNumber: patch.invoiceNumber }),
+    ...(patch.vendor !== undefined && { vendor: patch.vendor }),
+    ...(patch.poNumber !== undefined && { poNumber: patch.poNumber }),
+    ...(patch.invoiceDate !== undefined && {
+      invoiceDate: patch.invoiceDate ? new Date(patch.invoiceDate) : null,
+    }),
+    ...(patch.dueDate !== undefined && { dueDate: patch.dueDate ? new Date(patch.dueDate) : null }),
+    ...(patch.subtotal !== undefined && {
+      subtotal: patch.subtotal !== null ? new Prisma.Decimal(patch.subtotal) : null,
+    }),
+    ...(patch.tax !== undefined && {
+      tax: patch.tax !== null ? new Prisma.Decimal(patch.tax) : null,
+    }),
+    ...(patch.total !== undefined && {
+      total: patch.total !== null ? new Prisma.Decimal(patch.total) : null,
+    }),
+    ...(patch.currency !== undefined && { currency: patch.currency }),
+  };
+}
+
+// Manual correction path (e.g. a human catching a bad OCR read before
+// approval) — only the extracted/business fields are editable, never status,
+// vendor/PO links, exceptions, or the approval trail, all of which are
+// recomputed by the pipeline rather than hand-set. After applying the patch,
+// the full 9.4 checks pipeline is re-run so a correction can actually change
+// the outcome (a typo'd vendor now matches confidently, a corrected
+// invoiceNumber is no longer a duplicate, etc.) instead of just editing the
+// row and leaving a stale status/exceptions behind.
+export async function updateInvoice(
+  invoiceId: number,
+  patch: UpdateInvoiceInput,
+): Promise<Invoice> {
+  const invoice = await getInvoiceOrThrow(invoiceId);
+
+  if (!EDITABLE_STATUSES.includes(invoice.status)) {
+    throw new AppError(`Invoice #${invoice.id} cannot be edited from status ${invoice.status}`, 409);
+  }
+
+  await prisma.invoice.update({ where: { id: invoice.id }, data: toInvoiceEditData(patch) });
+
+  await logWorkflowEvent({
+    workflow: 'invoice_manual_update',
+    status: WorkflowStatus.SUCCESS,
+    error: `Updated fields: ${Object.keys(patch).join(', ')}`,
+  });
+
+  return runInvoiceChecks(invoice.id);
+}
+
+async function getInvoiceOrThrow(invoiceId: number): Promise<Invoice> {
+  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
+  if (!invoice) {
+    throw new AppError('Invoice not found', 404);
+  }
+  return invoice;
+}
+
+// Mock accounting-system export (TASKS.md 9.6) — persists the status
+// transition directly instead of calling a real third-party API, same "mock
+// integration" pattern as the CRM record endpoint (crm.routes.ts:34-42). Only
+// an APPROVED invoice can be exported (approval itself is Phase 9.5, scoped
+// to a separate branch); every failure path here (invalid state, DB error) is
+// logged to workflow_logs per 9.6's explicit "error branches ... logged like
+// every other stage" requirement.
+export async function exportInvoice(invoiceId: number): Promise<Invoice> {
+  try {
+    const invoice = await getInvoiceOrThrow(invoiceId);
+    if (invoice.status !== InvoiceStatus.APPROVED) {
+      throw new AppError(
+        `Invoice #${invoice.id} cannot be exported from status ${invoice.status}`,
+        409,
+      );
+    }
+
+    const updated = await prisma.invoice.update({
+      where: { id: invoice.id },
+      data: { status: InvoiceStatus.EXPORTED },
+    });
+
+    await logWorkflowEvent({ workflow: 'invoice_export', status: WorkflowStatus.SUCCESS });
+
+    return updated;
+  } catch (error) {
+    await logWorkflowEvent({ workflow: 'invoice_export', status: WorkflowStatus.FAILED, error });
+    throw error;
+  }
+}
+
+// Called by the n8n cron-triggered workflow (TASKS.md 9.6) once per EXPORTED
+// invoice whose dueDate is approaching — n8n owns the schedule/query, this
+// endpoint just performs the mocked payment-and-archive transition for one
+// invoice. Only an EXPORTED invoice is eligible. PAID is persisted before
+// ARCHIVED (two writes, not one) so both statuses are genuinely observable
+// via GET /api/invoices rather than only ever seeing the terminal state.
+export async function schedulePaymentForInvoice(invoiceId: number): Promise<Invoice> {
+  try {
+    const invoice = await getInvoiceOrThrow(invoiceId);
+    if (invoice.status !== InvoiceStatus.EXPORTED) {
+      throw new AppError(
+        `Invoice #${invoice.id} cannot be scheduled for payment from status ${invoice.status}`,
+        409,
+      );
+    }
+
+    await prisma.invoice.update({
+      where: { id: invoice.id },
+      data: { status: InvoiceStatus.PAID },
+    });
+    const archived = await prisma.invoice.update({
+      where: { id: invoice.id },
+      data: { status: InvoiceStatus.ARCHIVED },
+    });
+
+    await logWorkflowEvent({
+      workflow: 'invoice_schedule_payment',
+      status: WorkflowStatus.SUCCESS,
+    });
+
+    return archived;
+  } catch (error) {
+    await logWorkflowEvent({
+      workflow: 'invoice_schedule_payment',
+      status: WorkflowStatus.FAILED,
+      error,
+    });
+    throw error;
+  }
 }

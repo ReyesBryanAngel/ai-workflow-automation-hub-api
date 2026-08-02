@@ -111,6 +111,31 @@ async function main() {
   }
 
   console.log(`Seeded ${KNOWLEDGE_ARTICLES.length} knowledge articles`);
+
+  // Known-good vendor/PO pair for exercising Phase 9.4 matching end-to-end:
+  // an invoice extracted with vendor "TechSupply Solutions Inc." (or a close
+  // variant, to test fuzzy matching) and poNumber "PO-784512" should
+  // auto-link to these rows; a total within 5% of 5000.00 sails through
+  // clean, further out flags a PO-amount-mismatch exception.
+  await prisma.vendor.upsert({
+    where: { name: 'TechSupply Solutions Inc.' },
+    update: {},
+    create: {
+      name: 'TechSupply Solutions Inc.',
+      email: 'billing@techsupplysolutions.com',
+    },
+  });
+
+  await prisma.purchaseOrder.upsert({
+    where: { poNumber: 'PO-784512' },
+    update: {},
+    create: {
+      poNumber: 'PO-784512',
+      amount: 5000.0,
+    },
+  });
+
+  console.log('Seeded vendor "TechSupply Solutions Inc." and purchase order "PO-784512"');
 }
 
 main()

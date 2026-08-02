@@ -341,3 +341,154 @@ export async function extractInvoice(invoiceId: number): Promise<Invoice> {
 
   return updated;
 }
+
+export async function listInvoices(status?: InvoiceStatus): Promise<Invoice[]> {
+  return prisma.invoice.findMany({
+    where: status ? { status } : undefined,
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
+// Approve/reject are only valid from the two pre-decision statuses: a clean
+// invoice sitting at PENDING (no exceptions fired) or one flagged
+// NEEDS_REVIEW. Anything else (DUPLICATE, already APPROVED/REJECTED,
+// EXPORTED, PAID, ARCHIVED) is a terminal or out-of-band state that approval
+// must not silently overwrite.
+const REVIEWABLE_STATUSES: InvoiceStatus[] = [InvoiceStatus.PENDING, InvoiceStatus.NEEDS_REVIEW];
+
+async function getReviewableInvoice(invoiceId: number): Promise<Invoice> {
+  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
+  if (!invoice) {
+    throw new AppError('Invoice not found', 404);
+  }
+  if (!REVIEWABLE_STATUSES.includes(invoice.status)) {
+    throw new AppError(
+      `Invoice #${invoice.id} cannot be approved or rejected from status ${invoice.status}`,
+      409,
+    );
+  }
+  return invoice;
+}
+
+export async function approveInvoice(invoiceId: number, reviewerId: number): Promise<Invoice> {
+  const invoice = await getReviewableInvoice(invoiceId);
+
+  const updated = await prisma.invoice.update({
+    where: { id: invoice.id },
+    data: {
+      status: InvoiceStatus.APPROVED,
+      reviewedById: reviewerId,
+      reviewedAt: new Date(),
+      rejectionReason: null,
+    },
+  });
+
+  await logWorkflowEvent({ workflow: 'invoice_approve', status: WorkflowStatus.SUCCESS });
+
+  return updated;
+}
+
+export async function rejectInvoice(
+  invoiceId: number,
+  reviewerId: number,
+  reason: string,
+): Promise<Invoice> {
+  const invoice = await getReviewableInvoice(invoiceId);
+
+  const updated = await prisma.invoice.update({
+    where: { id: invoice.id },
+    data: {
+      status: InvoiceStatus.REJECTED,
+      reviewedById: reviewerId,
+      reviewedAt: new Date(),
+      rejectionReason: reason,
+    },
+  });
+
+  await logWorkflowEvent({
+    workflow: 'invoice_reject',
+    status: WorkflowStatus.SUCCESS,
+    error: reason,
+  });
+
+  return updated;
+}
+
+async function getInvoiceOrThrow(invoiceId: number): Promise<Invoice> {
+  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
+  if (!invoice) {
+    throw new AppError('Invoice not found', 404);
+  }
+  return invoice;
+}
+
+// Mock accounting-system export (TASKS.md 9.6) — persists the status
+// transition directly instead of calling a real third-party API, same "mock
+// integration" pattern as the CRM record endpoint (crm.routes.ts:34-42). Only
+// an APPROVED invoice can be exported; unlike approve/reject, every failure
+// path here (invalid state, DB error) is logged to workflow_logs per 9.6's
+// explicit "error branches ... logged like every other stage" requirement.
+export async function exportInvoice(invoiceId: number): Promise<Invoice> {
+  try {
+    const invoice = await getInvoiceOrThrow(invoiceId);
+    if (invoice.status !== InvoiceStatus.APPROVED) {
+      throw new AppError(
+        `Invoice #${invoice.id} cannot be exported from status ${invoice.status}`,
+        409,
+      );
+    }
+
+    const updated = await prisma.invoice.update({
+      where: { id: invoice.id },
+      data: { status: InvoiceStatus.EXPORTED },
+    });
+
+    await logWorkflowEvent({ workflow: 'invoice_export', status: WorkflowStatus.SUCCESS });
+
+    return updated;
+  } catch (error) {
+    await logWorkflowEvent({ workflow: 'invoice_export', status: WorkflowStatus.FAILED, error });
+    throw error;
+  }
+}
+
+// Called by the n8n cron-triggered workflow (TASKS.md 9.6) once per EXPORTED
+// invoice whose dueDate is approaching — n8n owns the schedule/query, this
+// endpoint just performs the mocked payment-and-archive transition for one
+// invoice. Only an EXPORTED invoice is eligible. PAID is persisted before
+// ARCHIVED (two writes, not one) so both statuses are genuinely observable
+// via GET /api/invoices rather than only ever seeing the terminal state.
+export async function schedulePaymentForInvoice(invoiceId: number): Promise<Invoice> {
+  try {
+    const invoice = await getInvoiceOrThrow(invoiceId);
+    if (invoice.status !== InvoiceStatus.EXPORTED) {
+      throw new AppError(
+        `Invoice #${invoice.id} cannot be scheduled for payment from status ${invoice.status}`,
+        409,
+      );
+    }
+
+    await prisma.invoice.update({
+      where: { id: invoice.id },
+      data: { status: InvoiceStatus.PAID },
+    });
+    const archived = await prisma.invoice.update({
+      where: { id: invoice.id },
+      data: { status: InvoiceStatus.ARCHIVED },
+    });
+
+    await logWorkflowEvent({
+      workflow: 'invoice_schedule_payment',
+      status: WorkflowStatus.SUCCESS,
+    });
+
+    return archived;
+  } catch (error) {
+    await logWorkflowEvent({
+      workflow: 'invoice_schedule_payment',
+      status: WorkflowStatus.FAILED,
+      error,
+    });
+    throw error;
+  }
+}
